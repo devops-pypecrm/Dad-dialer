@@ -1,0 +1,160 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Minimum-necessary permission set for a real default-dialer app
+         (prompt.md §30). Deliberately absent: RECORD_AUDIO,
+         BIND_ACCESSIBILITY_SERVICE, BIND_NOTIFICATION_LISTENER_SERVICE,
+         SYSTEM_ALERT_WINDOW, any SMS permission — those stay only in the
+         separate sideloaded "PypeCRM Helper" app (Dad-call-recorder),
+         which is never Play-distributed. This app IS meant for eventual
+         Play submission, so its manifest is otherwise kept this clean —
+         see REQUEST_INSTALL_PACKAGES below for the one current exception
+         and why. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <uses-permission android:name="android.permission.WRITE_CALL_LOG" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.WRITE_CONTACTS" />
+    <!-- Tier 0 native-recording recovery only (see recording/NativeRecordingScanner.kt) —
+         reads whatever file the phone's own OEM call-recorder already wrote
+         to MediaStore, the same permission any gallery/media app needs.
+         Deliberately NOT RECORD_AUDIO — this app never records a call
+         itself, only recovers what a privileged OEM recorder already
+         produced, so this stays within the Play-compliance stance the rest
+         of this manifest's comments already establish. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Vibrate fallback for the app's own explicit incoming-call ringtone
+         when the device is in RINGER_MODE_VIBRATE (see
+         CallEventBridge.startRinging) — a normal permission, granted at
+         install time, no runtime prompt. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- In-app update download/install (see pypecrm/APP_UPDATE_SYSTEM.md).
+         NOTE — the one deliberate exception to this manifest's otherwise
+         strict Play-submission-safe stance (see the top comment): Google
+         Play forbids an app it distributes from self-updating via a
+         sideloaded APK, which is exactly what REQUEST_INSTALL_PACKAGES +
+         the FileProvider/install-intent handoff below enables. Added
+         anyway because, in practice, this app is sideloaded-only today —
+         same as Dad-mobile/Dad-call-recorder already are (confirmed by
+         pypecrm/APP_UPDATE_SYSTEM.md §1). Revisit (remove this feature, or
+         gate it off) before ever actually submitting to Play. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application
+        android:label="Pype Dialer"
+        android:name="${applicationName}"
+        android:icon="@mipmap/launcher_icon"
+        android:usesCleartextTraffic="true"> <!-- Dev flavor talks to http://localhost:5001 via
+             `adb reverse` (see AppConfig._resolveBaseUrl), same as Dad-mobile/Dad-call-recorder. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Specifies an Android theme to apply to this Activity as soon as
+                 the Android process has started. This theme is visible to the user
+                 while the Flutter UI initializes. After that, this theme continues
+                 to determine the Window background behind the Flutter UI. -->
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- Required for RoleManager to even offer ROLE_DIALER to this
+                 app at all (confirmed by the dialer-version branch's own
+                 hard-won discovery) — a default-dialer candidate must be
+                 able to handle DIAL/CALL/VIEW(tel:). -->
+            <intent-filter>
+                <action android:name="android.intent.action.DIAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.DIAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="tel" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.CALL" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="tel" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="tel" />
+            </intent-filter>
+        </activity>
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+
+        <!-- The InCallService — the actual mechanism that makes this a real
+             default-dialer app. Bound by the Telecom framework once this app
+             holds ROLE_DIALER. BOTH meta-data flags below are required or
+             the app never appears as a candidate in Android's default-Phone
+             picker at all (confirmed the hard way on the dialer-version
+             branch this app's approach is modeled on) — IN_CALL_SERVICE_UI
+             marks this as providing the primary in-call UI,
+             IN_CALL_SERVICE_RINGING marks it as able to show the incoming-
+             call screen. -->
+        <service
+            android:name=".telecom.DialerInCallService"
+            android:permission="android.permission.BIND_INCALL_SERVICE"
+            android:exported="true">
+            <meta-data
+                android:name="android.telecom.IN_CALL_SERVICE_UI"
+                android:value="true" />
+            <meta-data
+                android:name="android.telecom.IN_CALL_SERVICE_RINGING"
+                android:value="true" />
+            <intent-filter>
+                <action android:name="android.telecom.InCallService" />
+            </intent-filter>
+        </service>
+
+        <!-- Hands the downloaded update .apk to the system installer — a
+             raw file:// path can't cross the app-to-installer boundary
+             since API 24 (StrictMode), so this exposes it via a content://
+             URI instead, scoped to ONLY the cache directory (least
+             privilege — see file_paths.xml). See apk_installer.dart /
+             MainActivity.kt's "installApk" handler. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+
+    <!-- Required to query activities that can process text, see:
+         https://developer.android.com/training/package-visibility and
+         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+
+         In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>

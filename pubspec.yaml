@@ -1,0 +1,81 @@
+name: dad_dialer
+description: "PypeCRM Dialer — production default-dialer app integrated with PypeCRM, meant for Google Play distribution."
+publish_to: 'none'
+
+version: 1.2.3+6
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # State management — same choice as Dad-mobile/Dad-call-recorder (@riverpod code generation).
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+
+  # Models
+  freezed_annotation: ^2.4.4
+  json_annotation: ^4.9.0
+
+  # Networking & auth — mirrors Dad-mobile's lib/core/network + lib/core/storage.
+  dio: ^5.7.0
+  flutter_secure_storage: ^9.2.2
+
+  # Note: Phase 1's offline queue for calls lives entirely native-side
+  # (android/.../sync/CallSyncQueueDbHelper.kt + DialerSyncWorker, mirroring
+  # Dad-call-recorder's CallEventDbHelper/CallSyncWorker) since every call
+  # event originates from InCallService callbacks, never Dart-side user
+  # action — unlike Dad-mobile's checkins queue, there's no Dart-side
+  # write to persist offline in this phase, so no Hive dependency is added
+  # here. Add hive/hive_flutter (matching the checkins precedent) only if a
+  # later phase introduces a genuinely Dart-originated offline write (e.g.
+  # a disposition/note saved while offline).
+
+  # Device contacts (features/contacts) — search/view/call/add-number,
+  # read-only bulk address-book upload is explicitly out of scope
+  # (prompt.md §27).
+  flutter_contacts: ^1.1.9+2
+
+  intl: ^0.19.0
+
+  # Local, per-device display preferences (e.g. "prefer CRM name in Call
+  # Logs") — not org policy, so these don't belong in the backend-synced
+  # CallSettings model. Same dependency Dad-mobile already uses for its own
+  # local prefs.
+  shared_preferences: ^2.3.3
+
+  # In-app update download/install (see pypecrm/APP_UPDATE_SYSTEM.md) —
+  # same versions as Dad-mobile/Dad-call-recorder for consistency.
+  path_provider: ^2.1.6
+  package_info_plus: ^9.0.1
+  url_launcher: ^6.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+  build_runner: ^2.4.13
+  freezed: ^2.5.7
+  json_serializable: ^6.9.0
+  riverpod_generator: ^2.6.3
+
+  flutter_launcher_icons: ^0.14.1
+
+# Source image for `dart run flutter_launcher_icons`, same convention as
+# Dad-call-recorder's pubspec.yaml. Android-only (this app has no ios/
+# platform folder).
+flutter_launcher_icons:
+  android: "launcher_icon"
+  image_path: "assets/icon/app_icon.png"
+  min_sdk_android: 24
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/icon/app_icon.png

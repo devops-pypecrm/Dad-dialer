@@ -1,0 +1,29 @@
+// GENERATED CODE - DO NOT MODIFY BY HAND
+
+part of 'call_settings_repository.dart';
+
+// **************************************************************************
+// RiverpodGenerator
+// **************************************************************************
+
+String _$callSettingsRepositoryHash() =>
+    r'a83b5f722583b72f7f316702c00773b0814da518';
+
+/// See also [callSettingsRepository].
+@ProviderFor(callSettingsRepository)
+final callSettingsRepositoryProvider =
+    Provider<CallSettingsRepository>.internal(
+      callSettingsRepository,
+      name: r'callSettingsRepositoryProvider',
+      debugGetCreateSourceHash: const bool.fromEnvironment('dart.vm.product')
+          ? null
+          : _$callSettingsRepositoryHash,
+      dependencies: null,
+      allTransitiveDependencies: null,
+    );
+
+@Deprecated('Will be removed in 3.0. Use Ref instead')
+// ignore: unused_element
+typedef CallSettingsRepositoryRef = ProviderRef<CallSettingsRepository>;
+// ignore_for_file: type=lint
+// ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package
