@@ -85,7 +85,23 @@ class TelecomBridge {
     return (raw ?? const {}).map((key, value) => MapEntry(key, value as bool? ?? false));
   }
 
-  Future<void> placeCall(String number) => _channel.invokeMethod('placeCall', {'number': number});
+  /// [simIndex] pins the call to one SIM from [getSimAccounts]; null uses
+  /// the system default SIM.
+  Future<void> placeCall(String number, {int? simIndex}) =>
+      _channel.invokeMethod('placeCall', {'number': number, 'simIndex': ?simIndex});
+
+  /// Call-capable SIMs in slot order — empty if READ_PHONE_STATE isn't
+  /// granted yet.
+  Future<List<({int index, String label})>> getSimAccounts() async {
+    final raw = await _channel.invokeListMethod<Map<Object?, Object?>>('getSimAccounts') ?? const [];
+    return [for (final sim in raw) (index: sim['index']! as int, label: sim['label']! as String)];
+  }
+
+  Future<bool> openNewContact(String number) async =>
+      (await _channel.invokeMethod<bool>('openNewContact', {'number': number})) ?? false;
+
+  Future<bool> openAddToContact(String number) async =>
+      (await _channel.invokeMethod<bool>('openAddToContact', {'number': number})) ?? false;
 
   Future<bool> answerCall() async => (await _channel.invokeMethod<bool>('answerCall')) ?? false;
   Future<bool> rejectCall() async => (await _channel.invokeMethod<bool>('rejectCall')) ?? false;

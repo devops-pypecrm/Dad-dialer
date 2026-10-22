@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../../../core/theme/app_theme.dart';
-import '../../../../core/utils/phone_normalizer.dart';
 import '../../../contacts/domain/device_contact.dart';
 import '../../../contacts/providers/contacts_provider.dart';
 import '../../../dialer/data/telecom_bridge.dart';
@@ -17,18 +16,17 @@ import '../../domain/call_log_entry.dart';
 import '../../providers/recents_provider.dart' show recentsProvider, recordedCallIndexProvider;
 
 class RecentsScreen extends ConsumerStatefulWidget {
-  const RecentsScreen({super.key, this.dialerOpen = false, this.dialedDigits = ''});
+  const RecentsScreen({super.key, this.dialedDigits = '', this.bottomInset = 0});
 
-  /// True while the half-screen dial pad drawer (`app.dart`) is open —
-  /// hides this screen's own "Calls" title + All/Missed control for as
-  /// long as the drawer is up, matching the reference behavior where the
-  /// header blanks out rather than staying put behind the drawer.
-  final bool dialerOpen;
-
-  /// Mirrors the drawer's currently typed number. Once non-empty, the list
-  /// normally showing call history switches to live-matching contacts/
-  /// leads instead, rendered with the same row look as a call log entry.
+  /// The number typed on the shell's keypad panel (`app.dart`). While it's
+  /// non-empty this screen swaps the "Calls" header + call history for the
+  /// typed number shown big at the top, with live matches below it — kept
+  /// even while the keypad is collapsed, until the number is cleared.
   final String dialedDigits;
+
+  /// How much of the bottom of this screen the keypad panel currently
+  /// covers, so lists can still scroll their last rows into view above it.
+  final double bottomInset;
 
   @override
   ConsumerState<RecentsScreen> createState() => _RecentsScreenState();
@@ -39,43 +37,47 @@ class _RecentsScreenState extends ConsumerState<RecentsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.dialedDigits.isNotEmpty) {
+      return SafeArea(
+        bottom: false,
+        child: _DialedNumberView(digits: widget.dialedDigits, bottomInset: widget.bottomInset),
+      );
+    }
+
     final recentsAsync = ref.watch(recentsProvider);
-    final isDialing = widget.dialerOpen && widget.dialedDigits.isNotEmpty;
+    final listPadding = EdgeInsets.only(bottom: widget.bottomInset + 88);
 
     return SafeArea(
       bottom: false,
       child: Column(
         children: [
-          if (!widget.dialerOpen)
-            _CallsHeader(
-              missedOnly: _missedOnly,
-              hasMissedCalls: recentsAsync.valueOrNull?.any((e) => e.type == CallLogType.missed) ?? false,
-              onChanged: (missedOnly) => setState(() => _missedOnly = missedOnly),
-            ),
+          _CallsHeader(
+            missedOnly: _missedOnly,
+            hasMissedCalls: recentsAsync.valueOrNull?.any((e) => e.type == CallLogType.missed) ?? false,
+            onChanged: (missedOnly) => setState(() => _missedOnly = missedOnly),
+          ),
           Expanded(
-            child: isDialing
-                ? _DialMatchList(digits: widget.dialedDigits)
-                : RefreshIndicator(
-                    onRefresh: () => ref.read(recentsProvider.notifier).refresh(),
-                    child: recentsAsync.when(
-                      data: (entries) {
-                        final filtered =
-                            _missedOnly ? entries.where((e) => e.type == CallLogType.missed).toList() : entries;
-                        return filtered.isEmpty
-                            ? ListView(
-                                children: [
-                                  Padding(
-                                    padding: const EdgeInsets.all(32),
-                                    child: Center(child: Text(_missedOnly ? 'No missed calls.' : 'No calls yet.')),
-                                  ),
-                                ],
-                              )
-                            : _GroupedCallList(entries: filtered);
-                      },
-                      loading: () => const Center(child: CircularProgressIndicator()),
-                      error: (error, _) => _RecentsError(error: error),
-                    ),
-                  ),
+            child: RefreshIndicator(
+              onRefresh: () => ref.read(recentsProvider.notifier).refresh(),
+              child: recentsAsync.when(
+                data: (entries) {
+                  final filtered =
+                      _missedOnly ? entries.where((e) => e.type == CallLogType.missed).toList() : entries;
+                  return filtered.isEmpty
+                      ? ListView(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.all(32),
+                              child: Center(child: Text(_missedOnly ? 'No missed calls.' : 'No calls yet.')),
+                            ),
+                          ],
+                        )
+                      : _GroupedCallList(entries: filtered, padding: listPadding);
+                },
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (error, _) => _RecentsError(error: error),
+              ),
+            ),
           ),
         ],
       ),
@@ -83,87 +85,212 @@ class _RecentsScreenState extends ConsumerState<RecentsScreen> {
   }
 }
 
-/// Live-matching contacts/leads as digits are typed into the drawer below,
-/// shown behind it in place of call history — same matching rules as
-/// [DialPadScreen]'s own suggestions (CRM lead vs device contact, gated by
-/// the same "Show CRM lead names in Call Logs" preference), just rendered
-/// as full-width rows styled like a call log entry instead of a compact card.
-class _DialMatchList extends ConsumerWidget {
-  const _DialMatchList({required this.digits});
+/// One live match for the typed number. [nameMatch]/[numberMatch] are the
+/// character ranges to highlight green (null = that part didn't match).
+typedef _DialMatch = ({String name, String number, (int, int)? nameMatch, (int, int)? numberMatch});
+
+/// What replaces the call history while a number is typed: the number
+/// itself, large and centered where the "Calls" header was, then either
+/// matching contacts/leads or — when nothing matches — the "New contact" /
+/// "Add to existing contact" shortcuts for saving it.
+class _DialedNumberView extends ConsumerWidget {
+  const _DialedNumberView({required this.digits, required this.bottomInset});
 
   final String digits;
+  final double bottomInset;
 
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final leads = ref.watch(cachedLeadsProvider).valueOrNull ?? const [];
-    final contacts = ref.watch(contactsListProvider).valueOrNull ?? const [];
+  static const _t9 = {
+    'a': '2', 'b': '2', 'c': '2', 'd': '3', 'e': '3', 'f': '3',
+    'g': '4', 'h': '4', 'i': '4', 'j': '5', 'k': '5', 'l': '5',
+    'm': '6', 'n': '6', 'o': '6', 'p': '7', 'q': '7', 'r': '7', 's': '7',
+    't': '8', 'u': '8', 'v': '8', 'w': '9', 'x': '9', 'y': '9', 'z': '9',
+  };
+
+  /// Range of the first word in [name] whose keypad spelling starts with
+  /// [typed] (e.g. "5" matches "Kozhikod", "Jaggoos"), as stock dialers do.
+  static (int, int)? _t9NameMatch(String name, String typed) {
+    final lower = name.toLowerCase();
+    for (final word in RegExp(r'[a-z0-9]+').allMatches(lower)) {
+      final w = word.group(0)!;
+      if (w.length < typed.length) continue;
+      var ok = true;
+      for (var i = 0; i < typed.length && ok; i++) {
+        final ch = w[i];
+        ok = (_t9[ch] ?? ch) == typed[i];
+      }
+      if (ok) return (word.start, word.start + typed.length);
+    }
+    return null;
+  }
+
+  /// Range in the *formatted* [number] covering the digits that contain
+  /// [typed] anywhere, skipping spaces/dashes/+ in between.
+  static (int, int)? _numberMatch(String number, String typed) {
+    final positions = <int>[];
+    final buffer = StringBuffer();
+    for (var i = 0; i < number.length; i++) {
+      final c = number[i];
+      if (c.codeUnitAt(0) >= 48 && c.codeUnitAt(0) <= 57) {
+        positions.add(i);
+        buffer.write(c);
+      }
+    }
+    final at = buffer.toString().indexOf(typed);
+    if (at < 0) return null;
+    return (positions[at], positions[at + typed.length - 1] + 1);
+  }
+
+  List<_DialMatch> _matches(WidgetRef ref) {
+    // '*', '#', '+' in the typed string make it a code/raw dial, not a
+    // search — show the save shortcuts instead of guessing.
+    if (!RegExp(r'^[0-9]+$').hasMatch(digits)) return const [];
+
     final preferCrm = ref.watch(preferCrmNameInCallLogsProvider).valueOrNull ?? true;
-
-    final typed = normalizePhoneNumber(digits);
-    bool startsWithTyped(String raw) => normalizePhoneNumber(raw).startsWith(typed);
-
-    final matches = <({String name, String number})>[];
+    final candidates = <({String name, List<String> numbers})>[];
     if (preferCrm) {
-      for (final lead in leads) {
-        final candidates = [lead.phone, lead.secondaryPhone].whereType<String>();
-        final match = candidates.where(startsWithTyped).firstOrNull;
-        if (match != null) matches.add((name: lead.displayName, number: match));
+      for (final CrmLead lead in ref.watch(cachedLeadsProvider).valueOrNull ?? const <CrmLead>[]) {
+        candidates.add((name: lead.displayName, numbers: [lead.phone, lead.secondaryPhone].whereType<String>().toList()));
       }
     } else {
-      for (final DeviceContact contact in contacts) {
-        final match = contact.phones.where(startsWithTyped).firstOrNull;
-        if (match != null) matches.add((name: contact.displayName, number: match));
+      for (final DeviceContact contact in ref.watch(contactsListProvider).valueOrNull ?? const <DeviceContact>[]) {
+        candidates.add((name: contact.displayName, numbers: contact.phones));
       }
     }
 
-    return ListView(
+    final byName = <_DialMatch>[];
+    final byNumber = <_DialMatch>[];
+    for (final c in candidates) {
+      if (c.numbers.isEmpty) continue;
+      final nameMatch = _t9NameMatch(c.name, digits);
+      for (final number in c.numbers) {
+        final numberMatch = _numberMatch(number, digits);
+        if (nameMatch != null) {
+          byName.add((name: c.name, number: number, nameMatch: nameMatch, numberMatch: numberMatch));
+          break;
+        }
+        if (numberMatch != null) {
+          byNumber.add((name: c.name, number: number, nameMatch: null, numberMatch: numberMatch));
+          break;
+        }
+      }
+      if (byName.length + byNumber.length >= 60) break;
+    }
+    return [...byName, ...byNumber];
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final matches = _matches(ref);
+    final scheme = Theme.of(context).colorScheme;
+
+    return Column(
       children: [
-        _DialMatchTile(name: null, number: digits),
-        for (final match in matches) _DialMatchTile(name: match.name, number: match.number),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 28, 20, 18),
+          child: SizedBox(
+            width: double.infinity,
+            height: 40,
+            // Long numbers shrink to fit on one line rather than wrapping.
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(digits, style: TextStyle(fontSize: 32, fontWeight: FontWeight.w500, color: scheme.onSurface)),
+            ),
+          ),
+        ),
+        Expanded(
+          child: ListView(
+            padding: EdgeInsets.only(bottom: bottomInset + 88),
+            children: matches.isEmpty
+                ? [
+                    _DialActionTile(
+                      icon: Icons.person_add_alt_1_outlined,
+                      label: 'New contact',
+                      onTap: () => ref.read(telecomBridgeProvider).openNewContact(digits),
+                    ),
+                    _DialActionTile(
+                      icon: Icons.contact_page_outlined,
+                      label: 'Add to existing contact',
+                      onTap: () => ref.read(telecomBridgeProvider).openAddToContact(digits),
+                    ),
+                  ]
+                : [for (final match in matches) _DialMatchTile(match: match)],
+          ),
+        ),
       ],
     );
   }
 }
 
-/// One row in [_DialMatchList] — deliberately built from the same bones as
-/// [_RecentTile] (avatar + name/number block, same paddings/text styles)
-/// minus the call-history-only parts (direction icon, SIM chip, duration),
-/// since there's no call history for a number you're still dialing.
-class _DialMatchTile extends ConsumerWidget {
-  const _DialMatchTile({required this.name, required this.number});
+class _DialActionTile extends StatelessWidget {
+  const _DialActionTile({required this.icon, required this.label, required this.onTap});
 
-  final String? name;
-  final String number;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.5)))),
+        child: Row(
+          children: [
+            Icon(icon, size: 22, color: scheme.onSurface),
+            const SizedBox(width: 16),
+            Text(label, style: const TextStyle(fontSize: 15)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A matching contact/lead: name on top, number below, with the part that
+/// matched what's typed tinted green. Tapping calls it.
+class _DialMatchTile extends ConsumerWidget {
+  const _DialMatchTile({required this.match});
+
+  final _DialMatch match;
+
+  static List<TextSpan> _highlighted(String text, (int, int)? range, TextStyle base) {
+    if (range == null) return [TextSpan(text: text, style: base)];
+    final (start, end) = range;
+    return [
+      TextSpan(text: text.substring(0, start), style: base),
+      TextSpan(text: text.substring(start, end), style: base.copyWith(color: kBrandColor)),
+      TextSpan(text: text.substring(end), style: base),
+    ];
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final title = name ?? number;
+    final scheme = Theme.of(context).colorScheme;
+    final nameStyle = TextStyle(fontWeight: FontWeight.w600, fontSize: 15, color: scheme.onSurface);
+    final numberStyle = TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant);
     return InkWell(
       onTap: () async {
         if (!await ensureCanPlaceCall(ref, context)) return;
-        await ref.read(telecomBridgeProvider).placeCall(number);
+        await ref.read(telecomBridgeProvider).placeCall(match.number);
       },
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.5)))),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            _Avatar(name: name),
-            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(title, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-                  if (name != null) ...[
-                    const SizedBox(height: 2),
-                    Text(number, style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-                  ],
+                  Text.rich(TextSpan(children: _highlighted(match.name, match.nameMatch, nameStyle)), overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 2),
+                  Text.rich(TextSpan(children: _highlighted(match.number, match.numberMatch, numberStyle))),
                 ],
               ),
             ),
-            Icon(Icons.call, color: kBrandColor, size: 20),
+            Icon(Icons.call_outlined, size: 20, color: scheme.onSurfaceVariant),
           ],
         ),
       ),
@@ -360,9 +487,10 @@ class _RecentsError extends ConsumerWidget {
 /// Splits the already date-DESC-sorted entries into Today/Yesterday/exact-date
 /// sections and renders each with its own header, matching the reference.
 class _GroupedCallList extends StatelessWidget {
-  const _GroupedCallList({required this.entries});
+  const _GroupedCallList({required this.entries, this.padding});
 
   final List<CallLogEntry> entries;
+  final EdgeInsets? padding;
 
   @override
   Widget build(BuildContext context) {
@@ -374,6 +502,7 @@ class _GroupedCallList extends StatelessWidget {
     }
 
     return ListView.builder(
+      padding: padding,
       itemCount: sections.length,
       itemBuilder: (context, sectionIndex) {
         final label = sections.keys.elementAt(sectionIndex);

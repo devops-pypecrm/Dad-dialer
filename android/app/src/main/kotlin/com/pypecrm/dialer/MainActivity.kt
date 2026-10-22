@@ -119,6 +119,27 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "checkDialerPermissions" -> result.success(DialerPermissions.check(this))
+                    "getSimAccounts" -> result.success(CallPlacer.simAccounts(this))
+                    // Dial pad's "New contact" / "Add to existing contact"
+                    // rows for a typed number nobody has saved yet — hand
+                    // off to the system Contacts editor, same as any stock
+                    // dialer, instead of re-implementing a contact editor.
+                    "openNewContact", "openAddToContact" -> {
+                        val number = call.argument<String>("number").orEmpty()
+                        val intent = if (call.method == "openNewContact") {
+                            android.content.Intent(android.content.Intent.ACTION_INSERT, android.provider.ContactsContract.Contacts.CONTENT_URI)
+                        } else {
+                            android.content.Intent(android.content.Intent.ACTION_INSERT_OR_EDIT)
+                                .setType(android.provider.ContactsContract.Contacts.CONTENT_ITEM_TYPE)
+                        }
+                        intent.putExtra(android.provider.ContactsContract.Intents.Insert.PHONE, number)
+                        try {
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: android.content.ActivityNotFoundException) {
+                            result.success(false)
+                        }
+                    }
                     "placeCall" -> {
                         val number = call.argument<String>("number")
                         if (number.isNullOrBlank()) {
@@ -133,7 +154,7 @@ class MainActivity : FlutterActivity() {
                             // uncaught SecurityException from placeCall().
                             result.error("permission_denied", "CALL_PHONE not granted", null)
                         } else {
-                            CallPlacer.placeCall(this, number)
+                            CallPlacer.placeCall(this, number, call.argument<Int>("simIndex"))
                             result.success(null)
                         }
                     }

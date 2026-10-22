@@ -6,10 +6,12 @@ import 'features/auth/presentation/screens/login_screen.dart';
 import 'features/auth/providers/session_provider.dart';
 import 'features/calls/presentation/screens/recents_screen.dart';
 import 'features/contacts/presentation/screens/contacts_screen.dart';
+import 'features/dialer/data/telecom_bridge.dart';
 import 'features/dialer/domain/call_state.dart';
-import 'features/dialer/presentation/screens/dial_pad_screen.dart';
+import 'features/dialer/presentation/widgets/dialer_keypad_sheet.dart';
 import 'features/dialer/presentation/screens/in_call_screen.dart';
 import 'features/dialer/providers/active_call_provider.dart';
+import 'features/dialer/providers/call_guard.dart';
 import 'features/favorites/presentation/screens/favorites_screen.dart';
 import 'features/settings/presentation/screens/settings_screen.dart';
 import 'features/updates/presentation/widgets/update_checker_overlay.dart';
@@ -69,11 +71,59 @@ class _AuthenticatedShell extends ConsumerStatefulWidget {
   ConsumerState<_AuthenticatedShell> createState() => _AuthenticatedShellState();
 }
 
-class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> {
+class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> with SingleTickerProviderStateMixin {
   int _tabIndex = 0;
   bool _showingInCallScreen = false;
-  bool _dialerOpen = false;
   String _dialedDigits = '';
+
+  /// 0 = keypad hidden (FAB showing), 1 = keypad fully up. Driven both by
+  /// the open/close animation and directly by a finger dragging the
+  /// panel's handle, so the panel tracks the drag 1:1.
+  late final AnimationController _keypad = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 260),
+  );
+
+  static const _callsIndex = 0;
+
+  @override
+  void dispose() {
+    _keypad.dispose();
+    super.dispose();
+  }
+
+  bool get _keypadOpen => _keypad.value > 0.5;
+
+  void _openKeypad() {
+    setState(() => _tabIndex = _callsIndex);
+    _keypad.animateTo(1, curve: Curves.easeOutCubic);
+  }
+
+  /// Hides the panel but keeps whatever was typed — the number stays at the
+  /// top of the screen and reappears in the panel when the FAB reopens it.
+  void _collapseKeypad() => _keypad.animateTo(0, curve: Curves.easeOutCubic);
+
+  void _setDigits(String digits) => setState(() => _dialedDigits = digits);
+
+  void _onDragUpdate(DragUpdateDetails details) {
+    _keypad.value -= (details.primaryDelta ?? 0) / DialerKeypadSheet.height;
+  }
+
+  void _onDragEnd(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0;
+    if (velocity > 300 || (velocity > -300 && _keypad.value < 0.6)) {
+      _collapseKeypad();
+    } else {
+      _keypad.animateTo(1, curve: Curves.easeOutCubic);
+    }
+  }
+
+  Future<void> _call(int? simIndex) async {
+    final number = _dialedDigits;
+    if (number.isEmpty) return;
+    if (!await ensureCanPlaceCall(ref, context)) return;
+    await ref.read(telecomBridgeProvider).placeCall(number, simIndex: simIndex);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -97,56 +147,85 @@ class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> {
       }
     });
 
-    // Matches the reference layout: Calls/Contacts/Favorites/Settings as
-    // labeled bottom-nav tabs, with the dial pad promoted to its own
-    // floating action button (not a 5th tab) — tapping it pushes
-    // DialPadScreen full-screen rather than swapping tabs.
-    final screens = [
-      RecentsScreen(dialerOpen: _dialerOpen, dialedDigits: _dialedDigits),
-      const ContactsScreen(),
-      const FavoritesScreen(),
-      const SettingsScreen(),
-    ];
-    const callsIndex = 0;
+    final onCalls = _tabIndex == _callsIndex;
 
-    return Scaffold(
-      // No app bar on the Calls tab — it builds its own header (the big
-      // "Calls" title + All/Missed segmented control), matching the
-      // reference exactly. The other tabs keep a plain title bar.
-      appBar: _tabIndex == callsIndex ? null : AppBar(title: Text(_titleFor(_tabIndex))),
-      body: screens[_tabIndex],
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => setState(() {
-          if (_dialerOpen) {
-            _dialerOpen = false;
-            _dialedDigits = '';
-          } else {
-            _dialerOpen = true;
-          }
-        }),
-        backgroundColor: kBrandColor,
-        shape: const CircleBorder(),
-        child: Icon(_dialerOpen ? Icons.keyboard_arrow_down : Icons.dialpad, color: Colors.white),
-      ),
-      // Scaffold's own `bottomSheet` (not a modal `showModalBottomSheet`)
-      // is what gives this the reference's "overlays the body, nav bar
-      // stays visible and tappable, no scrim blocking the list above it"
-      // behavior for free — a modal sheet draws over the whole screen
-      // including the nav bar and blocks the body with a barrier, which
-      // isn't what was asked for here.
-      bottomSheet: _dialerOpen
-          ? _DialerDrawer(
-              onDigitsChanged: (digits) => setState(() => _dialedDigits = digits),
-              onClose: () => setState(() {
-                _dialerOpen = false;
-                _dialedDigits = '';
-              }),
-            )
-          : null,
-      bottomNavigationBar: _BottomNavBar(
-        selectedIndex: _tabIndex,
-        onSelected: (index) => setState(() => _tabIndex = index),
-      ),
+    return AnimatedBuilder(
+      animation: _keypad,
+      builder: (context, _) {
+        final t = _keypad.value;
+        // Back first hides the keypad, then clears the typed number, and
+        // only then leaves the app — same order as the stock dialer.
+        final interceptBack = onCalls && (_keypadOpen || _dialedDigits.isNotEmpty);
+        return PopScope(
+          canPop: !interceptBack,
+          onPopInvokedWithResult: (didPop, _) {
+            if (didPop) return;
+            if (_keypadOpen) {
+              _collapseKeypad();
+            } else {
+              _setDigits('');
+            }
+          },
+          child: Scaffold(
+            // No app bar on the Calls tab — it builds its own header (the big
+            // "Calls" title + All/Missed segmented control). The other tabs
+            // keep a plain title bar.
+            appBar: onCalls ? null : AppBar(title: Text(_titleFor(_tabIndex))),
+            body: onCalls
+                ? Stack(
+                    children: [
+                      Positioned.fill(
+                        child: RecentsScreen(
+                          dialedDigits: _dialedDigits,
+                          bottomInset: DialerKeypadSheet.height * t,
+                        ),
+                      ),
+                      // The keypad slides up from behind the bottom nav bar
+                      // and sits on top of the list — the list stays visible
+                      // and scrollable above it, no scrim.
+                      if (t > 0)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: -DialerKeypadSheet.height * (1 - t),
+                          child: DialerKeypadSheet(
+                            hasDigits: _dialedDigits.isNotEmpty,
+                            onDigit: (d) => _setDigits(_dialedDigits + d),
+                            onBackspace: () {
+                              if (_dialedDigits.isEmpty) return;
+                              _setDigits(_dialedDigits.substring(0, _dialedDigits.length - 1));
+                            },
+                            onClear: () => _setDigits(''),
+                            onCollapse: _collapseKeypad,
+                            onCall: _call,
+                            onDragUpdate: _onDragUpdate,
+                            onDragEnd: _onDragEnd,
+                          ),
+                        ),
+                    ],
+                  )
+                : [const ContactsScreen(), const FavoritesScreen(), const SettingsScreen()][_tabIndex - 1],
+            // The FAB shrinks away as the keypad rises and pops back as it
+            // drops — the two are never on screen at the same time.
+            floatingActionButton: Transform.scale(
+              scale: onCalls ? 1 - t : 1,
+              child: FloatingActionButton(
+                onPressed: _openKeypad,
+                backgroundColor: kBrandColor,
+                shape: const CircleBorder(),
+                child: const Icon(Icons.dialpad, color: Colors.white),
+              ),
+            ),
+            bottomNavigationBar: _BottomNavBar(
+              selectedIndex: _tabIndex,
+              onSelected: (index) {
+                if (index != _callsIndex) _keypad.value = 0;
+                setState(() => _tabIndex = index);
+              },
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -155,61 +234,6 @@ class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> {
         2 => 'Favorites',
         _ => 'Settings',
       };
-}
-
-/// Half-screen dial pad drawer anchored above the bottom nav bar, via
-/// `Scaffold.bottomSheet` in [_AuthenticatedShellState] rather than
-/// `showModalBottomSheet` -- see that call site's comment for why.
-class _DialerDrawer extends StatelessWidget {
-  const _DialerDrawer({required this.onDigitsChanged, required this.onClose});
-
-  final ValueChanged<String> onDigitsChanged;
-  final VoidCallback onClose;
-
-  @override
-  Widget build(BuildContext context) {
-    // 0.5 of screen height was too tight for the keypad screen's actual
-    // content (lead-match chip space + number display + a 4-row keypad +
-    // the call button row all assume roughly this much room) -- squeezed
-    // into half the screen it rendered as overlapping/clipped digits
-    // instead of a readable keypad. 0.72 leaves the keypad legible while
-    // still reading as a drawer, not a full-screen takeover; clamped so it
-    // never shrinks below a usable floor on short screens or grows to
-    // swallow the status bar / nav bar area on tall ones.
-    final screenHeight = MediaQuery.sizeOf(context).height;
-    final height = (screenHeight * 0.72).clamp(420.0, screenHeight - 120.0);
-    return GestureDetector(
-      // Swipe the handle down to dismiss, same gesture a real bottom sheet
-      // would give you for free -- `bottomSheet` doesn't add that on its
-      // own since it's non-modal and not draggable by default.
-      onVerticalDragEnd: (details) {
-        if ((details.primaryVelocity ?? 0) > 200) onClose();
-      },
-      child: ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: Container(
-          height: height,
-          color: Theme.of(context).colorScheme.surface,
-          child: Column(
-            children: [
-              const SizedBox(height: 10),
-              Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.outlineVariant,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              Expanded(
-                child: DialPadScreen(showSuggestionsPanel: false, onNumberChanged: onDigitsChanged),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// Labeled bottom bar matching the reference: icon + text label per tab,
