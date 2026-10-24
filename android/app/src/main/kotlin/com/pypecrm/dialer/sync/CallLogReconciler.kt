@@ -95,6 +95,12 @@ object CallLogReconciler {
                     val typeStr = typeToString(typeInt)
                     val durationSecs = cursor.getInt(durationCol)
                     val phoneNumber = cursor.getString(numberCol) ?: ""
+                    // The silent recording-bridge leg is infrastructure, not
+                    // a customer call — never sync it as a CRM interaction.
+                    if (settingsCache.isBridgeNumber(phoneNumber)) {
+                        newestSeen = maxOf(newestSeen, date)
+                        continue
+                    }
 
                     val hardwareId = rowId.toString()
                     val callSessionId: String? = null

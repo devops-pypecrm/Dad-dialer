@@ -35,6 +35,23 @@ class CallSettingsCache(context: Context) {
         return prefs.getString(KEY_CLOUD_RECORDING_BRIDGE_NUMBER, null)?.takeIf { it.isNotBlank() }
     }
 
+    /** Every bridge number this device has ever dialed — the call-log
+     * backfill ([com.pypecrm.dialer.sync.CallLogReconciler]) uses it to skip
+     * the bridge leg itself, which must never become a CRM call record. */
+    fun rememberBridgeNumber(number: String) {
+        val known = prefs.getStringSet(KEY_KNOWN_BRIDGE_NUMBERS, emptySet()).orEmpty().toMutableSet()
+        if (known.add(last10(number))) prefs.edit().putStringSet(KEY_KNOWN_BRIDGE_NUMBERS, known).apply()
+    }
+
+    fun isBridgeNumber(number: String): Boolean {
+        val current = prefs.getString(KEY_CLOUD_RECORDING_BRIDGE_NUMBER, null)?.let(::last10)
+        val known = prefs.getStringSet(KEY_KNOWN_BRIDGE_NUMBERS, emptySet()).orEmpty()
+        val n = last10(number)
+        return n.length >= 6 && (n == current || n in known)
+    }
+
+    private fun last10(raw: String) = raw.filter { it.isDigit() }.takeLast(10)
+
     /** Raw status for UI display (the in-call "Recording" indicator) —
      * unlike [isDirectionAllowed], this never fails open/closed; it just
      * reports whether a real fetch has ever landed, so the UI can show
@@ -72,6 +89,7 @@ class CallSettingsCache(context: Context) {
         private const val KEY_AUTO_OUTBOUND = "auto_record_outbound"
         private const val KEY_CLOUD_RECORDING_ENABLED = "cloud_recording_enabled"
         private const val KEY_CLOUD_RECORDING_BRIDGE_NUMBER = "cloud_recording_bridge_number"
+        private const val KEY_KNOWN_BRIDGE_NUMBERS = "known_bridge_numbers"
         private const val KEY_FETCHED_AT = "fetched_at"
         private const val TTL_MILLIS = 15 * 60 * 1000L
     }

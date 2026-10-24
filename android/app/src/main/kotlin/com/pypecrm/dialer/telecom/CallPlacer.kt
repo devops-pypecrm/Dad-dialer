@@ -22,10 +22,10 @@ import androidx.core.content.ContextCompat
  * SIM via `EXTRA_PHONE_ACCOUNT_HANDLE` instead of the system default.
  */
 object CallPlacer {
-    fun placeCall(context: Context, number: String, simIndex: Int? = null) {
+    fun placeCall(context: Context, number: String, simIndex: Int? = null, accountHandle: PhoneAccountHandle? = null) {
         val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
         val extras = Bundle()
-        val handle = simIndex?.let { callCapableAccounts(context).getOrNull(it) }
+        val handle = accountHandle ?: simIndex?.let { callCapableAccounts(context).getOrNull(it) }
         if (handle != null) extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle)
         telecomManager.placeCall(Uri.fromParts("tel", number, null), extras)
     }
