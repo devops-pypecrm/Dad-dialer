@@ -141,30 +141,6 @@ class BackendApi(private val authPrefs: NativeAuthPrefs) {
         }
     }
 
-    /** `POST /api/telephony/bridge/outcome` — fire-and-forget result of one
-     * cloud-recording attempt (merged / not answered / merge refused), with
-     * the SIM label and phone model. This is how real carrier coverage gets
-     * measured from live traffic instead of from a hand-tested demo SIM. */
-    fun reportBridgeOutcome(outcome: String, simLabel: String?): Boolean {
-        val (token, base) = authOrNull() ?: return false
-        val json = JSONObject()
-            .put("outcome", outcome)
-            .put("simLabel", simLabel ?: JSONObject.NULL)
-            .put("device", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
-            .put("androidSdk", android.os.Build.VERSION.SDK_INT)
-        val request = Request.Builder()
-            .url("$base/telephony/bridge/outcome")
-            .header("Authorization", "Bearer $token")
-            .post(json.toString().toRequestBody("application/json".toMediaTypeOrNull()))
-            .build()
-        return try {
-            client.newCall(request).execute().use { it.isSuccessful }
-        } catch (e: Exception) {
-            Log.w(TAG, "reportBridgeOutcome network error", e)
-            false
-        }
-    }
-
     /** Tier 0 path: a real OEM-recorded file was found and this call's
      * direction is allowed — `POST /api/android/recordings`, multipart,
      * file field `audio`. `hardwareId` is sent un-namespaced; the server

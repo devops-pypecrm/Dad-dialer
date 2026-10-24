@@ -316,11 +316,6 @@ object CallEventBridge : EventChannel.StreamHandler {
             val settingsCache = CallSettingsCache(context)
             settingsCache.refreshIfStale(api)
             val bridgeNumber = settingsCache.cloudRecordingBridgeNumberOrNull() ?: return@launch
-            // Same per-direction consent switch Tier 0 honors — cloud
-            // recording is still recording, so an org that hasn't turned on
-            // recording for this direction must never get a bridge leg.
-            val isOutgoing = call.details.callDirection != Call.Details.DIRECTION_INCOMING
-            if (!settingsCache.isDirectionAllowed(isOutgoing)) return@launch
             // Call.conference()/registerCallback and TelecomManager.placeCall
             // are InCallService/Telecom APIs this app otherwise only ever
             // drives from the main thread (matching the manual-test entry
