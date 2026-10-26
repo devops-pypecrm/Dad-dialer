@@ -37,6 +37,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private lateinit var roleManager: DefaultDialerRoleManager
     private var pendingRoleResult: MethodChannel.Result? = null
+    private var pendingScreeningResult: MethodChannel.Result? = null
     private var pendingPermissionsResult: MethodChannel.Result? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -85,6 +86,8 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "isDefaultDialer" -> result.success(roleManager.isDefaultDialer())
                     "requestDialerRole" -> handleRequestDialerRole(result)
+                    "isCallScreeningRoleHeld" -> result.success(isCallScreeningRoleHeld())
+                    "requestCallScreeningRole" -> handleRequestCallScreeningRole(result)
                     "openAppSettings" -> {
                         roleManager.openAppSettings()
                         result.success(null)
@@ -351,6 +354,36 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun callScreeningRoleManager(): android.app.role.RoleManager? =
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q)
+            getSystemService(android.content.Context.ROLE_SERVICE) as? android.app.role.RoleManager
+        else null
+
+    private fun isCallScreeningRoleHeld(): Boolean =
+        callScreeningRoleManager()?.isRoleHeld(android.app.role.RoleManager.ROLE_CALL_SCREENING) ?: false
+
+    /** "Caller ID & spam app" role — a plain one-tap system prompt, no extra
+     * runtime permissions. Outcome strings reuse the dialer role's wire
+     * format. */
+    private fun handleRequestCallScreeningRole(result: MethodChannel.Result) {
+        val manager = callScreeningRoleManager()
+        when {
+            manager == null || !manager.isRoleAvailable(android.app.role.RoleManager.ROLE_CALL_SCREENING) ->
+                result.success(mapOf("outcome" to "UNSUPPORTED_SDK"))
+            manager.isRoleHeld(android.app.role.RoleManager.ROLE_CALL_SCREENING) ->
+                result.success(mapOf("outcome" to "ALREADY_DEFAULT"))
+            pendingScreeningResult != null ->
+                result.success(mapOf("outcome" to "ALREADY_IN_FLIGHT"))
+            else -> {
+                pendingScreeningResult = result
+                startActivityForResult(
+                    manager.createRequestRoleIntent(android.app.role.RoleManager.ROLE_CALL_SCREENING),
+                    SCREENING_ROLE_REQUEST_CODE,
+                )
+            }
+        }
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
@@ -380,6 +413,12 @@ class MainActivity : FlutterActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SCREENING_ROLE_REQUEST_CODE) {
+            val pending = pendingScreeningResult
+            pendingScreeningResult = null
+            pending?.success(mapOf("outcome" to if (isCallScreeningRoleHeld()) "GRANTED" else "DENIED"))
+            return
+        }
         if (requestCode != DefaultDialerRoleManager.ROLE_REQUEST_CODE) return
         roleManager.onRoleResult()
         val result = pendingRoleResult
@@ -390,6 +429,7 @@ class MainActivity : FlutterActivity() {
     }
 
     companion object {
+        private const val SCREENING_ROLE_REQUEST_CODE = 5103
         private const val METHOD_CHANNEL = "com.pypecrm.dialer/telecom"
         private const val EVENT_CHANNEL = "com.pypecrm.dialer/call_events"
         private const val INSTALLER_CHANNEL = "com.pypecrm.dialer/installer"

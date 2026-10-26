@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../auth/providers/session_provider.dart';
 import '../../../dialer/data/telecom_bridge.dart';
+import '../../../dialer/providers/call_screening_role_provider.dart';
 import '../../../dialer/providers/default_dialer_role_provider.dart';
 import '../../../updates/presentation/screens/updates_screen.dart';
 import '../../../updates/providers/app_update_provider.dart';
@@ -37,6 +38,18 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
+  Future<void> _requestScreeningRole(BuildContext context, WidgetRef ref) async {
+    final outcome = await ref.read(callScreeningRoleProvider.notifier).requestRole();
+    if (!context.mounted) return;
+    final message = switch (outcome) {
+      DialerRoleOutcome.granted => 'Pype Dialer is now your Caller ID & spam app.',
+      DialerRoleOutcome.denied => 'Not set — you can try again anytime.',
+      DialerRoleOutcome.unsupportedSdk => 'This phone does not offer a Caller ID & spam app option.',
+      _ => null,
+    };
+    if (message != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   void _showPermanentlyDeniedDialog(BuildContext context, WidgetRef ref) {
     showDialog<void>(
       context: context,
@@ -64,6 +77,7 @@ class SettingsScreen extends ConsumerWidget {
     final session = ref.watch(sessionControllerProvider).valueOrNull;
     final isDefaultAsync = ref.watch(defaultDialerRoleProvider);
     final isDefault = isDefaultAsync.valueOrNull ?? false;
+    final isScreeningDefault = ref.watch(callScreeningRoleProvider).valueOrNull ?? false;
     final preferCrmNameAsync = ref.watch(preferCrmNameInCallLogsProvider);
     final preferCrmName = preferCrmNameAsync.valueOrNull ?? true;
     final availableUpdate = ref.watch(availableUpdateProvider).valueOrNull;
@@ -107,6 +121,40 @@ class SettingsScreen extends ConsumerWidget {
                 const Text(
                   'Required for Pype Dialer to place/receive calls, read call '
                   'history, and identify CRM leads on incoming calls.',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      isScreeningDefault ? 'Caller ID & spam app: ACTIVE' : 'Caller ID & spam app: INACTIVE',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: isScreeningDefault ? Colors.green : Colors.orange,
+                      ),
+                    ),
+                    if (!isScreeningDefault)
+                      FilledButton(
+                        onPressed: () => _requestScreeningRole(context, ref),
+                        child: const Text('Set as default'),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Lets Pype Dialer identify incoming callers as CRM leads. '
+                  'It never blocks or hides a call.',
                   style: TextStyle(fontSize: 12),
                 ),
               ],

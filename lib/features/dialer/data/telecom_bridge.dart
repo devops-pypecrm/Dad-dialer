@@ -73,6 +73,15 @@ class TelecomBridge {
   Future<bool> isDefaultDialer() async =>
       (await _channel.invokeMethod<bool>('isDefaultDialer')) ?? false;
 
+  /// Whether this app is the "Caller ID & spam app" (call-screening role).
+  Future<bool> isCallScreeningRoleHeld() async =>
+      (await _channel.invokeMethod<bool>('isCallScreeningRoleHeld')) ?? false;
+
+  Future<DialerRoleOutcome> requestCallScreeningRole() async {
+    final raw = await _channel.invokeMapMethod<String, Object?>('requestCallScreeningRole');
+    return DialerRoleOutcome.fromWire(raw?['outcome'] as String?);
+  }
+
   Future<DialerRoleOutcome> requestDialerRole() async {
     final raw = await _channel.invokeMapMethod<String, Object?>('requestDialerRole');
     return DialerRoleOutcome.fromWire(raw?['outcome'] as String?);

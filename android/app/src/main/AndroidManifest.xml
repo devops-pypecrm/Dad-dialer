@@ -129,6 +129,18 @@
             </intent-filter>
         </service>
 
+        <!-- Makes this app selectable under Settings > Default apps >
+             "Caller ID & spam app" (ROLE_CALL_SCREENING). Pass-through only —
+             see DialerCallScreeningService. -->
+        <service
+            android:name=".telecom.DialerCallScreeningService"
+            android:permission="android.permission.BIND_SCREENING_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.telecom.CallScreeningService" />
+            </intent-filter>
+        </service>
+
         <!-- Hands the downloaded update .apk to the system installer — a
              raw file:// path can't cross the app-to-installer boundary
              since API 24 (StrictMode), so this exposes it via a content://
