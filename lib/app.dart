@@ -13,7 +13,11 @@ import 'features/dialer/presentation/screens/in_call_screen.dart';
 import 'features/dialer/providers/active_call_provider.dart';
 import 'features/dialer/providers/call_guard.dart';
 import 'features/favorites/presentation/screens/favorites_screen.dart';
+import 'features/leads/domain/crm_lead.dart';
+import 'features/leads/presentation/post_call_lead_sheet.dart';
+import 'features/leads/providers/cached_leads_provider.dart';
 import 'features/settings/presentation/screens/settings_screen.dart';
+import 'features/settings/providers/post_call_note_preference_provider.dart';
 import 'features/updates/presentation/widgets/update_checker_overlay.dart';
 
 class App extends ConsumerWidget {
@@ -74,6 +78,10 @@ class _AuthenticatedShell extends ConsumerStatefulWidget {
 class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> with SingleTickerProviderStateMixin {
   int _tabIndex = 0;
   bool _showingInCallScreen = false;
+
+  /// The last call seen while it was still ongoing — once it ends, this is
+  /// who the post-call "Update lead" sheet is about.
+  ActiveCall? _lastOngoingCall;
   String _dialedDigits = '';
 
   /// 0 = keypad hidden (FAB showing), 1 = keypad fully up. Driven both by
@@ -125,10 +133,27 @@ class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> with S
     await ref.read(telecomBridgeProvider).placeCall(number, simIndex: simIndex);
   }
 
+  /// After a call with a number that matches a CRM lead, offer to log a
+  /// note and change the lead's status right away (unless turned off in
+  /// Settings). Contacts aren't offered — status is a lead-only field.
+  Future<void> _maybeAskForLeadUpdate(ActiveCall ended) async {
+    final number = ended.number;
+    if (number == null) return;
+    final enabled = await ref.read(askNoteAfterCallProvider.future);
+    if (!enabled || !mounted) return;
+    final lead = ref.read(cachedLeadsProvider.notifier).matchLead(number);
+    if (lead == null || !lead.isLead) return;
+    // Let the in-call screen's pop transition finish first.
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    if (!mounted) return;
+    await showPostCallLeadSheet(context, lead, wasIncoming: ended.isIncoming);
+  }
+
   @override
   Widget build(BuildContext context) {
     ref.listen(activeCallProvider, (previous, next) {
       final call = next.valueOrNull ?? ActiveCall.none;
+      if (call.isOngoing && call.number != null) _lastOngoingCall = call;
       if (call.isOngoing && !_showingInCallScreen) {
         _showingInCallScreen = true;
         Navigator.of(context)
@@ -144,6 +169,9 @@ class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> with S
         _showingInCallScreen = false;
         final navigator = Navigator.of(context);
         if (navigator.canPop()) navigator.pop();
+        final ended = _lastOngoingCall;
+        _lastOngoingCall = null;
+        if (ended != null) _maybeAskForLeadUpdate(ended);
       }
     });
 

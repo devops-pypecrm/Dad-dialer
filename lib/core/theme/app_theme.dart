@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// Same brand color as Dad-mobile/Dad-call-recorder so this reads as the
-/// same product family.
-const kBrandColor = Color(0xFF578732);
+/// The purple from the PypeCRM logo (#8C5FA8, same value as the web app's
+/// `plum-500`), so the dialer reads as part of the same product.
+const kBrandColor = Color(0xFF8C5FA8);
 
 class AppTheme {
   AppTheme._();
