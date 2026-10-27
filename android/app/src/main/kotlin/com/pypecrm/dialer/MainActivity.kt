@@ -132,7 +132,12 @@ class MainActivity : FlutterActivity() {
                     // DefaultDialerRoleManager captured the moment before
                     // this app became default.
                     "openOriginalDialerApp" -> {
-                        val originalPackage = roleManager.originalDialerPackage()
+                        // Saved package if we captured one; otherwise (role
+                        // was granted from system Settings, so there was
+                        // no chance to capture it) find the phone's other
+                        // dialer: any other app that handles tel: dialing,
+                        // system apps first.
+                        val originalPackage = roleManager.originalDialerPackage() ?: findOtherDialerPackage()
                         val launchIntent = originalPackage?.let { packageManager.getLaunchIntentForPackage(it) }
                         if (launchIntent != null) {
                             startActivity(launchIntent)
@@ -398,6 +403,19 @@ class MainActivity : FlutterActivity() {
                 requestPermissions(missing, RUNTIME_PERMS_REQUEST_CODE)
             }
         }
+    }
+
+    /** The phone's own dialer when we weren't the one to capture it: the
+     * other app(s) that can handle a tel: dial, preferring system apps.
+     * Needs the DIAL <queries> entry in AndroidManifest.xml. */
+    private fun findOtherDialerPackage(): String? {
+        val dial = android.content.Intent(android.content.Intent.ACTION_DIAL, android.net.Uri.parse("tel:"))
+        val candidates = packageManager.queryIntentActivities(dial, 0)
+            .map { it.activityInfo.applicationInfo }
+            .filter { it.packageName != packageName }
+        val pick = candidates.firstOrNull { (it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 }
+            ?: candidates.firstOrNull()
+        return pick?.packageName
     }
 
     private fun callScreeningRoleManager(): android.app.role.RoleManager? =
