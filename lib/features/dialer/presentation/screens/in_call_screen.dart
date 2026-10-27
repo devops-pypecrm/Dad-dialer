@@ -11,6 +11,7 @@ import '../../domain/call_state.dart';
 import '../../providers/active_call_provider.dart';
 import '../widgets/call_controls_row.dart';
 import '../widgets/call_timer.dart';
+import '../widgets/dialer_keypad_sheet.dart';
 
 /// Renders whatever `activeCallProvider` says Telecom currently has —
 /// RINGING (incoming, slide to answer/decline), DIALING (outgoing, ringing
@@ -65,7 +66,9 @@ class InCallScreen extends ConsumerWidget {
                     _CrmContextCard(lead: matchedLead),
                   ],
                   const Spacer(),
-                  if (call.isRinging)
+                  if (call.state == TelecomCallState.selectSim)
+                    _SimChooser(bridge: bridge)
+                  else if (call.isRinging)
                     _SlideToAnswerControl(onAnswer: bridge.answerCall, onDecline: bridge.rejectCall)
                   else if (call.isOngoing)
                     _InCallActions(bridge: bridge, call: call)
@@ -86,6 +89,35 @@ class InCallScreen extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Shown while Telecom waits for us to pick the SIM (dual-SIM phone set to
+/// "ask every time"): one button per SIM, plus cancel.
+class _SimChooser extends ConsumerWidget {
+  const _SimChooser({required this.bridge});
+
+  final TelecomBridge bridge;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final sims = ref.watch(simAccountsProvider).valueOrNull ?? const [];
+    return Column(
+      children: [
+        Text('Call with', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 12),
+        for (final sim in sims.isEmpty ? [(index: 0, label: 'SIM 1'), (index: 1, label: 'SIM 2')] : sims)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: FilledButton.icon(
+              onPressed: () => bridge.selectPhoneAccount(sim.index),
+              icon: const Icon(Icons.sim_card_outlined),
+              label: Text(sim.label),
+            ),
+          ),
+        TextButton(onPressed: bridge.endCall, child: const Text('Cancel')),
+      ],
     );
   }
 }
@@ -135,6 +167,7 @@ class _CallerIdentity extends StatelessWidget {
   }
 
   String _statusLabel(TelecomCallState state) => switch (state) {
+        TelecomCallState.selectSim => 'Choose a SIM',
         TelecomCallState.dialing => 'Calling…',
         TelecomCallState.ringingIncoming => 'Incoming call',
         TelecomCallState.active => 'In call',

@@ -43,6 +43,9 @@ object CallPlacer {
         }
     }
 
+    /** The [simIndex]-th call-capable SIM, in [simAccounts] order. */
+    fun accountAt(context: Context, simIndex: Int): PhoneAccountHandle? = callCapableAccounts(context).getOrNull(simIndex)
+
     @SuppressLint("MissingPermission")
     private fun callCapableAccounts(context: Context): List<PhoneAccountHandle> {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {

@@ -70,6 +70,28 @@ class TelecomBridge {
   final MethodChannel _channel;
   final EventChannel _eventChannel;
 
+  /// Number from the tel: link that launched the app (CRM "call" button,
+  /// contacts, browser), once — null if it wasn't launched that way.
+  Future<String?> consumeLaunchNumber() => _channel.invokeMethod<String>('consumeLaunchNumber');
+
+  /// Tel: links that arrive while the app is already open. Registers the
+  /// channel's Dart-side handler; only one listener is needed (the shell).
+  void onDialNumber(void Function(String number) handler) {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'dialNumber' && call.arguments is String) handler(call.arguments as String);
+    });
+  }
+
+  /// Picks the SIM for a call waiting in [TelecomCallState.selectSim].
+  Future<bool> selectPhoneAccount(int simIndex) async =>
+      (await _channel.invokeMethod<bool>('selectPhoneAccount', {'simIndex': simIndex})) ?? false;
+
+  /// Asks for permissions the dialer role doesn't grant by itself (music &
+  /// audio for finding call recordings, notifications for the incoming-call
+  /// screen). No-op unless we're the default dialer and something's missing.
+  Future<bool> ensureRuntimePermissions() async =>
+      (await _channel.invokeMethod<bool>('ensureRuntimePermissions')) ?? false;
+
   Future<bool> isDefaultDialer() async =>
       (await _channel.invokeMethod<bool>('isDefaultDialer')) ?? false;
 
@@ -229,7 +251,8 @@ class TelecomBridge {
   }
 
   TelecomCallState _stateFromWire(String? raw) => switch (raw) {
-        'DIALING' || 'CONNECTING' => TelecomCallState.dialing,
+        'NEW' || 'DIALING' || 'CONNECTING' => TelecomCallState.dialing,
+        'SELECT_PHONE_ACCOUNT' => TelecomCallState.selectSim,
         'RINGING' => TelecomCallState.ringingIncoming,
         'ACTIVE' => TelecomCallState.active,
         'HOLDING' => TelecomCallState.holding,

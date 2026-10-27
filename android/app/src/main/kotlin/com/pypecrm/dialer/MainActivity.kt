@@ -39,11 +39,29 @@ class MainActivity : FlutterActivity() {
     private var pendingRoleResult: MethodChannel.Result? = null
     private var pendingScreeningResult: MethodChannel.Result? = null
     private var pendingPermissionsResult: MethodChannel.Result? = null
+    private var pendingRuntimePermsResult: MethodChannel.Result? = null
+    private var methodChannel: MethodChannel? = null
+
+    /** Number from a tel: link (CRM "call" button, contacts, browser) that
+     * opened this activity — handed to Dart to pre-fill the keypad. */
+    private var pendingDialNumber: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         roleManager = DefaultDialerRoleManager(this)
         applyIncomingCallWindowFlagsIfNeeded(intent)
+        pendingDialNumber = dialNumberFrom(intent)
+    }
+
+    /** DIAL / VIEW / CALL with a tel: URI -> the number, decoded. */
+    private fun dialNumberFrom(intent: android.content.Intent?): String? {
+        val action = intent?.action ?: return null
+        if (action != android.content.Intent.ACTION_DIAL && action != android.content.Intent.ACTION_VIEW &&
+            action != android.content.Intent.ACTION_CALL
+        ) return null
+        val data = intent.data ?: return null
+        if (data.scheme != "tel") return null
+        return data.schemeSpecificPart?.takeIf { it.isNotBlank() }
     }
 
     // `launchMode="singleTop"` means a second launch (e.g. tapping the
@@ -54,7 +72,10 @@ class MainActivity : FlutterActivity() {
     // applied.
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         applyIncomingCallWindowFlagsIfNeeded(intent)
+        // App already running: push the number to Dart right away.
+        dialNumberFrom(intent)?.let { methodChannel?.invokeMethod("dialNumber", it) }
     }
 
     /** Only set when actually launched FOR an incoming call (see
@@ -81,9 +102,17 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
+        methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
+        methodChannel!!
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "consumeLaunchNumber" -> {
+                        result.success(pendingDialNumber)
+                        pendingDialNumber = null
+                    }
+                    "selectPhoneAccount" ->
+                        result.success(CallEventBridge.selectPhoneAccount(call.argument<Int>("simIndex") ?: 0))
+                    "ensureRuntimePermissions" -> handleEnsureRuntimePermissions(result)
                     "isDefaultDialer" -> result.success(roleManager.isDefaultDialer())
                     "requestDialerRole" -> handleRequestDialerRole(result)
                     "isCallScreeningRoleHeld" -> result.success(isCallScreeningRoleHeld())
@@ -354,6 +383,23 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /** When the app already holds the dialer role — e.g. it was picked from
+     * system Settings instead of our own "Set up" button — Android grants
+     * the phone/call-log/contacts permissions with the role but NOT music &
+     * audio (needed to find the phone's call recordings) or notifications
+     * (needed for the incoming-call screen). Ask for whatever is missing. */
+    private fun handleEnsureRuntimePermissions(result: MethodChannel.Result) {
+        val missing = DialerPermissions.missing(this)
+        when {
+            !roleManager.isDefaultDialer() || missing.isEmpty() -> result.success(true)
+            pendingRuntimePermsResult != null -> result.success(false)
+            else -> {
+                pendingRuntimePermsResult = result
+                requestPermissions(missing, RUNTIME_PERMS_REQUEST_CODE)
+            }
+        }
+    }
+
     private fun callScreeningRoleManager(): android.app.role.RoleManager? =
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q)
             getSystemService(android.content.Context.ROLE_SERVICE) as? android.app.role.RoleManager
@@ -390,6 +436,12 @@ class MainActivity : FlutterActivity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == RUNTIME_PERMS_REQUEST_CODE) {
+            val pending = pendingRuntimePermsResult
+            pendingRuntimePermsResult = null
+            pending?.success(grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED })
+            return
+        }
         if (requestCode != DefaultDialerRoleManager.PERMISSION_REQUEST_CODE) return
         roleManager.onPermissionsResult()
         val result = pendingPermissionsResult
@@ -430,6 +482,7 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val SCREENING_ROLE_REQUEST_CODE = 5103
+        private const val RUNTIME_PERMS_REQUEST_CODE = 5104
         private const val METHOD_CHANNEL = "com.pypecrm.dialer/telecom"
         private const val EVENT_CHANNEL = "com.pypecrm.dialer/call_events"
         private const val INSTALLER_CHANNEL = "com.pypecrm.dialer/installer"

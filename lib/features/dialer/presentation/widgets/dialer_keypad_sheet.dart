@@ -27,7 +27,8 @@ final simAccountsProvider = FutureProvider<List<({int index, String label})>>((r
 class DialerKeypadSheet extends ConsumerWidget {
   const DialerKeypadSheet({
     super.key,
-    required this.hasDigits,
+    required this.controller,
+    required this.focusNode,
     required this.onDigit,
     required this.onBackspace,
     required this.onClear,
@@ -39,7 +40,9 @@ class DialerKeypadSheet extends ConsumerWidget {
 
   /// Total panel height (handle + keys + action row), not counting the
   /// bottom nav bar below it. The shell needs this for its slide math.
-  static const double height = _handleHeight + _rowHeight * 4 + _actionRowHeight + 8;
+  static const double height = _handleHeight + _inputHeight + _rowHeight * 4 + _actionRowHeight + 8;
+
+  static const double _inputHeight = 52;
 
   static const double _handleHeight = 22;
   static const double _rowHeight = 50;
@@ -52,7 +55,11 @@ class DialerKeypadSheet extends ConsumerWidget {
     ['*', ''], ['0', '+'], ['#', ''],
   ];
 
-  final bool hasDigits;
+  /// The typed number. A real text field (with the soft keyboard turned
+  /// off) so the cursor can be moved and the text selected, cut, copied and
+  /// pasted with the normal long-press menu.
+  final TextEditingController controller;
+  final FocusNode focusNode;
   final ValueChanged<String> onDigit;
   final VoidCallback onBackspace;
   final VoidCallback onClear;
@@ -93,6 +100,33 @@ class DialerKeypadSheet extends ConsumerWidget {
                       color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
                       borderRadius: BorderRadius.circular(2),
                     ),
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(
+              height: _inputHeight,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: TextField(
+                  controller: controller,
+                  focusNode: focusNode,
+                  autofocus: true,
+                  showCursor: true,
+                  keyboardType: TextInputType.none,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.w500, color: scheme.onSurface, letterSpacing: 0.5),
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9+*#,;]'))],
+                  decoration: InputDecoration(
+                    hintText: 'Enter number',
+                    hintStyle: TextStyle(fontSize: 22, color: scheme.onSurfaceVariant.withValues(alpha: 0.6)),
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    filled: false,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 8),
                   ),
                 ),
               ),
@@ -147,7 +181,11 @@ class DialerKeypadSheet extends ConsumerWidget {
                     else
                       Expanded(child: _CallPill(label: sims.firstOrNull?.label ?? 'Call', onTap: () => onCall(null))),
                     const SizedBox(width: 4),
-                    _BackspaceButton(enabled: hasDigits, onTap: onBackspace, onLongPress: onClear),
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: controller,
+                      builder: (context, value, _) =>
+                          _BackspaceButton(enabled: value.text.isNotEmpty, onTap: onBackspace, onLongPress: onClear),
+                    ),
                   ],
                 ),
               ),

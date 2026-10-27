@@ -356,6 +356,18 @@ object CallEventBridge : EventChannel.StreamHandler {
 
     // ---- Call control, invoked from MainActivity's MethodChannel handler ----
 
+    /** Dual-SIM phone with "ask every time": Telecom parks a new outgoing
+     * call in SELECT_PHONE_ACCOUNT and waits for the dialer (us) to pick the
+     * SIM. Without this the call never proceeds and no call screen shows. */
+    fun selectPhoneAccount(simIndex: Int): Boolean {
+        val call = trackedCall ?: return false
+        val context = appContext ?: return false
+        if (call.state != Call.STATE_SELECT_PHONE_ACCOUNT) return false
+        val handle = CallPlacer.accountAt(context, simIndex) ?: return false
+        call.phoneAccountSelected(handle, false)
+        return true
+    }
+
     fun answer(): Boolean {
         val call = trackedCall ?: return false
         call.answer(VideoProfile.STATE_AUDIO_ONLY)

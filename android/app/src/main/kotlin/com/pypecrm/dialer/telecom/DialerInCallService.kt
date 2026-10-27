@@ -33,6 +33,25 @@ class DialerInCallService : InCallService() {
         CloudRecordingBridge.onCallAdded(call)
         if (!CloudRecordingBridge.shouldIgnoreForPrimaryTracking(call)) {
             CallEventBridge.onCallAdded(call)
+            showCallScreen(call)
+        }
+    }
+
+    /** Puts our call screen on top of whatever app is open — for calls
+     * placed from another app (CRM "call" button, contacts, browser) and
+     * for incoming calls while the phone is in use. An InCallService bound
+     * by the system is allowed to start activities from the background;
+     * the full-screen notification (IncomingCallNotifier) still covers the
+     * locked-screen case. */
+    private fun showCallScreen(call: Call) {
+        try {
+            val intent = android.content.Intent(this, com.pypecrm.dialer.MainActivity::class.java).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                if (call.state == Call.STATE_RINGING) putExtra(IncomingCallNotifier.EXTRA_INCOMING_CALL, true)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not bring call screen to front", e)
         }
     }
 

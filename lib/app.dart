@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/theme/app_theme.dart';
@@ -75,14 +76,21 @@ class _AuthenticatedShell extends ConsumerStatefulWidget {
   ConsumerState<_AuthenticatedShell> createState() => _AuthenticatedShellState();
 }
 
-class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> with SingleTickerProviderStateMixin {
+class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   int _tabIndex = 0;
   bool _showingInCallScreen = false;
 
   /// The last call seen while it was still ongoing — once it ends, this is
   /// who the post-call "Update lead" sheet is about.
   ActiveCall? _lastOngoingCall;
-  String _dialedDigits = '';
+  final _digits = TextEditingController();
+  final _digitsFocus = FocusNode();
+  String get _dialedDigits => _digits.text;
+
+  /// Phone number found on the clipboard, offered as a one-tap "Paste" chip.
+  String? _clipboardNumber;
+  String? _dismissedClipboardNumber;
 
   /// 0 = keypad hidden (FAB showing), 1 = keypad fully up. Driven both by
   /// the open/close animation and directly by a finger dragging the
@@ -95,9 +103,100 @@ class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> with S
   static const _callsIndex = 0;
 
   @override
+  void initState() {
+    super.initState();
+    // The keypad is up whenever the dialer opens, ready to type.
+    _keypad.value = 1;
+    _digits.addListener(() => setState(() {}));
+    WidgetsBinding.instance.addObserver(this);
+    final bridge = ref.read(telecomBridgeProvider);
+    bridge.onDialNumber(_prefill);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final launchNumber = await bridge.consumeLaunchNumber();
+      if (launchNumber != null) _prefill(launchNumber);
+      await bridge.ensureRuntimePermissions();
+      _checkClipboard();
+    });
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _keypad.dispose();
+    _digits.dispose();
+    _digitsFocus.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _checkClipboard();
+  }
+
+  static String _cleanNumber(String raw) => raw.replaceAll(RegExp(r'[^0-9+*#]'), '');
+
+  /// A tel: link (CRM "call" button, contacts, browser) opened the dialer:
+  /// show the Calls tab with the keypad up and the number typed in.
+  void _prefill(String raw) {
+    final number = _cleanNumber(Uri.decodeComponent(raw));
+    if (number.isEmpty) return;
+    _setDigits(number);
+    _openKeypad();
+  }
+
+  /// Offers a phone number sitting on the clipboard. Android only lets the
+  /// foreground app read the clipboard, so this runs on open and on resume.
+  Future<void> _checkClipboard() async {
+    try {
+      if (!(await Clipboard.hasStrings())) return;
+      final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text?.trim() ?? '';
+      final number = _cleanNumber(text);
+      final digitCount = number.replaceAll(RegExp(r'[^0-9]'), '').length;
+      // Only something that looks like a phone number, not any copied text.
+      final looksLikeNumber = text.length <= 24 && RegExp(r'^[0-9+\-()\s.]+$').hasMatch(text) && digitCount >= 6 && digitCount <= 15;
+      if (!mounted) return;
+      setState(() {
+        _clipboardNumber = looksLikeNumber && number != _dialedDigits && number != _dismissedClipboardNumber ? number : null;
+      });
+    } catch (_) {
+      // Clipboard access can be refused — just don't offer the chip.
+    }
+  }
+
+  void _pasteClipboardNumber() {
+    final number = _clipboardNumber;
+    if (number == null) return;
+    setState(() {
+      _dismissedClipboardNumber = number;
+      _clipboardNumber = null;
+    });
+    _prefill(number);
+  }
+
+  /// Keypad press: insert at the cursor (or replace the selection).
+  void _insertDigit(String digit) {
+    final value = _digits.value;
+    final sel = value.selection.isValid ? value.selection : TextSelection.collapsed(offset: value.text.length);
+    final text = value.text.replaceRange(sel.start, sel.end, digit);
+    _digits.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: sel.start + digit.length));
+  }
+
+  /// Deletes the selection, or the character before the cursor.
+  void _backspace() {
+    final value = _digits.value;
+    if (value.text.isEmpty) return;
+    final sel = value.selection.isValid ? value.selection : TextSelection.collapsed(offset: value.text.length);
+    if (!sel.isCollapsed) {
+      _digits.value = TextEditingValue(
+        text: value.text.replaceRange(sel.start, sel.end, ''),
+        selection: TextSelection.collapsed(offset: sel.start),
+      );
+    } else if (sel.start > 0) {
+      _digits.value = TextEditingValue(
+        text: value.text.replaceRange(sel.start - 1, sel.start, ''),
+        selection: TextSelection.collapsed(offset: sel.start - 1),
+      );
+    }
   }
 
   bool get _keypadOpen => _keypad.value > 0.5;
@@ -111,7 +210,8 @@ class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> with S
   /// top of the screen and reappears in the panel when the FAB reopens it.
   void _collapseKeypad() => _keypad.animateTo(0, curve: Curves.easeOutCubic);
 
-  void _setDigits(String digits) => setState(() => _dialedDigits = digits);
+  void _setDigits(String digits) =>
+      _digits.value = TextEditingValue(text: digits, selection: TextSelection.collapsed(offset: digits.length));
 
   void _onDragUpdate(DragUpdateDetails details) {
     _keypad.value -= (details.primaryDelta ?? 0) / DialerKeypadSheet.height;
@@ -208,6 +308,20 @@ class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> with S
                           bottomInset: DialerKeypadSheet.height * t,
                         ),
                       ),
+                      if (_clipboardNumber != null)
+                        Positioned(
+                          top: MediaQuery.paddingOf(context).top + 6,
+                          left: 16,
+                          right: 16,
+                          child: _PasteNumberChip(
+                            number: _clipboardNumber!,
+                            onPaste: _pasteClipboardNumber,
+                            onDismiss: () => setState(() {
+                              _dismissedClipboardNumber = _clipboardNumber;
+                              _clipboardNumber = null;
+                            }),
+                          ),
+                        ),
                       // The keypad slides up from behind the bottom nav bar
                       // and sits on top of the list — the list stays visible
                       // and scrollable above it, no scrim.
@@ -217,12 +331,10 @@ class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> with S
                           right: 0,
                           bottom: -DialerKeypadSheet.height * (1 - t),
                           child: DialerKeypadSheet(
-                            hasDigits: _dialedDigits.isNotEmpty,
-                            onDigit: (d) => _setDigits(_dialedDigits + d),
-                            onBackspace: () {
-                              if (_dialedDigits.isEmpty) return;
-                              _setDigits(_dialedDigits.substring(0, _dialedDigits.length - 1));
-                            },
+                            controller: _digits,
+                            focusNode: _digitsFocus,
+                            onDigit: _insertDigit,
+                            onBackspace: _backspace,
                             onClear: () => _setDigits(''),
                             onCollapse: _collapseKeypad,
                             onCall: _call,
@@ -262,6 +374,48 @@ class _AuthenticatedShellState extends ConsumerState<_AuthenticatedShell> with S
         2 => 'Favorites',
         _ => 'Settings',
       };
+}
+
+/// "Paste 98765 43210" — shown at the top of the Calls tab when a phone
+/// number is on the clipboard.
+class _PasteNumberChip extends StatelessWidget {
+  const _PasteNumberChip({required this.number, required this.onPaste, required this.onDismiss});
+
+  final String number;
+  final VoidCallback onPaste;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 3,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(24),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
+        onTap: onPaste,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 14),
+          child: Row(
+            children: [
+              const Icon(Icons.content_paste, size: 18, color: kBrandColor),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text.rich(
+                  TextSpan(children: [
+                    const TextSpan(text: 'Paste  '),
+                    TextSpan(text: number, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ]),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              IconButton(icon: const Icon(Icons.close, size: 18), tooltip: 'Dismiss', onPressed: onDismiss),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Labeled bottom bar matching the reference: icon + text label per tab,

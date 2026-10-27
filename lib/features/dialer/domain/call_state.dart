@@ -4,6 +4,9 @@ part 'call_state.freezed.dart';
 
 enum TelecomCallState {
   none,
+  /// Outgoing call on a dual-SIM phone set to "ask every time" — waiting
+  /// for us to pick the SIM before it can dial.
+  selectSim,
   dialing,
   ringingIncoming,
   active,

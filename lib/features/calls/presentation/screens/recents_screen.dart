@@ -40,7 +40,13 @@ class _RecentsScreenState extends ConsumerState<RecentsScreen> {
     if (widget.dialedDigits.isNotEmpty) {
       return SafeArea(
         bottom: false,
-        child: _DialedNumberView(digits: widget.dialedDigits, bottomInset: widget.bottomInset),
+        // The keypad panel has its own number field; only show the big
+        // number up here when the keypad is tucked away.
+        child: _DialedNumberView(
+          digits: widget.dialedDigits,
+          bottomInset: widget.bottomInset,
+          showNumber: widget.bottomInset < 1,
+        ),
       );
     }
 
@@ -94,10 +100,11 @@ typedef _DialMatch = ({String name, String number, (int, int)? nameMatch, (int, 
 /// matching contacts/leads or — when nothing matches — the "New contact" /
 /// "Add to existing contact" shortcuts for saving it.
 class _DialedNumberView extends ConsumerWidget {
-  const _DialedNumberView({required this.digits, required this.bottomInset});
+  const _DialedNumberView({required this.digits, required this.bottomInset, required this.showNumber});
 
   final String digits;
   final double bottomInset;
+  final bool showNumber;
 
   static const _t9 = {
     'a': '2', 'b': '2', 'c': '2', 'd': '3', 'e': '3', 'f': '3',
@@ -185,7 +192,9 @@ class _DialedNumberView extends ConsumerWidget {
 
     return Column(
       children: [
-        Padding(
+        if (!showNumber) const SizedBox(height: 56),
+        if (showNumber)
+          Padding(
           padding: const EdgeInsets.fromLTRB(20, 28, 20, 18),
           child: SizedBox(
             width: double.infinity,
