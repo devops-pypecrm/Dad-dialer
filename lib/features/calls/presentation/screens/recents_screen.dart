@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/theme/app_theme.dart';
 import '../../../contacts/domain/device_contact.dart';
@@ -10,10 +11,18 @@ import '../../../dialer/data/telecom_bridge.dart';
 import '../../../dialer/providers/call_guard.dart';
 import '../../../dialer/providers/default_dialer_role_provider.dart';
 import '../../../leads/domain/crm_lead.dart';
+import '../../../leads/presentation/post_call_lead_sheet.dart';
 import '../../../leads/providers/cached_leads_provider.dart';
 import '../../../settings/providers/call_log_name_preference_provider.dart';
 import '../../domain/call_log_entry.dart';
 import '../../providers/recents_provider.dart' show recentsProvider, recordedCallIndexProvider;
+
+/// Direction-coded colors for a call-log row's avatar/icon — green for a
+/// completed incoming call, brand purple for outgoing (ties the "you called
+/// them" case to the brand accent, replacing the reference app's orange),
+/// coral-red for anything that didn't connect (missed/rejected/blocked).
+const _kIncomingColor = Color(0xFF66BB6A);
+const _kMissedColor = Color(0xFFEF5350);
 
 class RecentsScreen extends ConsumerStatefulWidget {
   const RecentsScreen({super.key, this.dialedDigits = '', this.bottomInset = 0});
@@ -555,6 +564,10 @@ class _RecentTile extends ConsumerWidget {
   final CallLogEntry entry;
   final String sectionLabel;
 
+  /// `wa.me` wants digits only (no `+`, spaces or punctuation) — country
+  /// code included, same convention used by every "click to WhatsApp" link.
+  static String _digitsOnly(String number) => number.replaceAll(RegExp(r'[^0-9]'), '');
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final matchedLead = entry.number != null
@@ -571,86 +584,158 @@ class _RecentTile extends ConsumerWidget {
     // call this device didn't actually confirm a native recording for.
     final hasRecording = ref.watch(recordedCallIndexProvider).valueOrNull?.hasRecording(entry.number, entry.date) ?? false;
     final isRejected = entry.type == CallLogType.rejected;
+    final isBadStatus = isMissed || isRejected || entry.type == CallLogType.blocked;
+    final directionColor = _directionColor(entry.type);
+    final number = entry.number;
+    final scheme = Theme.of(context).colorScheme;
 
-    return InkWell(
-      onTap: entry.number == null
-          ? null
-          : () async {
-              if (!await ensureCanPlaceCall(ref, context)) return;
-              await ref.read(telecomBridgeProvider).placeCall(entry.number!);
-            },
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Icon(_directionIcon(entry.type), color: _directionColor(entry.type), size: 18),
-            const SizedBox(width: 8),
-            _Avatar(name: resolvedName),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: kCardSurfaceColor,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            onTap: number == null
+                ? null
+                : () async {
+                    if (!await ensureCanPlaceCall(ref, context)) return;
+                    await ref.read(telecomBridgeProvider).placeCall(number);
+                  },
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Text(
-                    title,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 16,
-                      color: isMissed || isRejected ? Colors.redAccent : null,
-                    ),
-                  ),
-                  if (entry.simSlot != null || hasRecording || (resolvedName != null && entry.number != null)) ...[
-                    const SizedBox(height: 3),
-                    Row(
+                  _Avatar(name: resolvedName, color: directionColor, icon: _directionIcon(entry.type)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (entry.simSlot != null) ...[
-                          _SimChip(slot: entry.simSlot!, label: entry.simLabel),
-                          const SizedBox(width: 6),
-                        ],
-                        if (hasRecording) ...[
-                          const _RecordedBadge(),
-                          const SizedBox(width: 6),
-                        ],
-                        if (resolvedName != null && entry.number != null)
-                          Flexible(
-                            child: Text(
-                              entry.number!,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
-                            ),
+                        Text(
+                          title,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 16,
+                            color: isBadStatus ? _kMissedColor : scheme.onSurface,
                           ),
+                        ),
+                        if (resolvedName != null && number != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            number,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant),
+                          ),
+                        ],
+                        if (entry.simSlot != null || hasRecording) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              if (entry.simSlot != null) ...[
+                                _SimChip(slot: entry.simSlot!, label: entry.simLabel),
+                                const SizedBox(width: 6),
+                              ],
+                              if (hasRecording) const _RecordedBadge(),
+                            ],
+                          ),
+                        ],
                       ],
                     ),
-                  ],
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _timeLabel(entry.date, sectionLabel),
+                        style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _statusLabel(entry),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isBadStatus ? _kMissedColor : scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 6),
+                  _InfoButton(entry: entry),
                 ],
               ),
             ),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _timeLabel(entry.date, sectionLabel),
-                  style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  _statusLabel(entry),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isMissed || isRejected ? Colors.redAccent : Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+          if (number != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _QuickActionIcon(
+                    icon: Icons.copy_outlined,
+                    tooltip: 'Copy number',
+                    onTap: () => Clipboard.setData(ClipboardData(text: number)),
                   ),
-                ),
-              ],
+                  _QuickActionIcon(
+                    icon: Icons.sms_outlined,
+                    tooltip: 'Message',
+                    color: scheme.onSurfaceVariant,
+                    onTap: () => launchUrl(Uri.parse('sms:$number')),
+                  ),
+                  _QuickActionIcon(
+                    icon: Icons.chat_bubble_outline,
+                    tooltip: 'WhatsApp',
+                    color: _kIncomingColor,
+                    onTap: () => launchUrl(
+                      Uri.parse('https://wa.me/${_digitsOnly(number)}'),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                  ),
+                  _QuickActionIcon(
+                    icon: Icons.call_outlined,
+                    tooltip: 'Call',
+                    color: kBrandColor,
+                    onTap: () async {
+                      if (!await ensureCanPlaceCall(ref, context)) return;
+                      await ref.read(telecomBridgeProvider).placeCall(number);
+                    },
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(width: 6),
-            _InfoButton(entry: entry),
-          ],
-        ),
+          // Only offered for a number that actually resolves to a CRM lead —
+          // there's nothing to attach a note to otherwise, so the bar is
+          // omitted entirely rather than shown disabled.
+          if (matchedLead != null)
+            InkWell(
+              onTap: () => showPostCallLeadSheet(context, matchedLead, wasIncoming: entry.type == CallLogType.incoming),
+              child: Container(
+                width: double.infinity,
+                color: kNestedSurfaceColor,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                child: Row(
+                  children: [
+                    Icon(Icons.edit_note, size: 16, color: scheme.onSurfaceVariant),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Tap to add note & tag',
+                      style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -688,10 +773,10 @@ class _RecentTile extends ConsumerWidget {
 
   static Color _directionColor(CallLogType type) => switch (type) {
         CallLogType.outgoing => kBrandColor,
-        CallLogType.incoming => kBrandColor,
-        CallLogType.missed => Colors.redAccent,
-        CallLogType.rejected => Colors.redAccent,
-        CallLogType.blocked => Colors.redAccent,
+        CallLogType.incoming => _kIncomingColor,
+        CallLogType.missed => _kMissedColor,
+        CallLogType.rejected => _kMissedColor,
+        CallLogType.blocked => _kMissedColor,
         CallLogType.unknown => Colors.grey,
       };
 
@@ -702,44 +787,78 @@ class _RecentTile extends ConsumerWidget {
   }
 }
 
-/// Colored initial circle for a resolved name, or a plain gray silhouette
-/// for an unrecognized number — this app has no contact-photo support
-/// (Android Contacts photo lookup isn't wired up), so a real photo was
-/// never an option here, unlike the reference mockup's avatars.
+/// Call-direction-colored circle, with the resolved name's initial (or a
+/// plain person silhouette for an unrecognized number — this app has no
+/// contact-photo support, Android Contacts photo lookup isn't wired up) and
+/// a small corner badge carrying the direction icon (call-made/received/
+/// end), matching the reference's direction-coded avatar ring.
 class _Avatar extends StatelessWidget {
-  const _Avatar({required this.name});
+  const _Avatar({required this.name, required this.color, required this.icon});
 
   final String? name;
-
-  static const _palette = [
-    Color(0xFFE57373),
-    Color(0xFF64B5F6),
-    Color(0xFF81C784),
-    Color(0xFFFFB74D),
-    Color(0xFFBA68C8),
-    Color(0xFF4DB6AC),
-    Color(0xFFF06292),
-    Color(0xFFA1887F),
-  ];
+  final Color color;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
     const size = 46.0;
-    if (name == null || name!.trim().isEmpty) {
-      return CircleAvatar(
-        radius: size / 2,
-        backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-        child: Icon(Icons.person, color: Theme.of(context).colorScheme.onSurfaceVariant, size: 26),
-      );
-    }
-    final trimmed = name!.trim();
-    final color = _palette[trimmed.hashCode.abs() % _palette.length];
-    return CircleAvatar(
-      radius: size / 2,
-      backgroundColor: color,
-      child: Text(
-        trimmed[0].toUpperCase(),
-        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+    final trimmed = name?.trim();
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          CircleAvatar(
+            radius: size / 2,
+            backgroundColor: color.withValues(alpha: 0.18),
+            child: trimmed == null || trimmed.isEmpty
+                ? Icon(Icons.person, color: color, size: 24)
+                : Text(
+                    trimmed[0].toUpperCase(),
+                    style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 18),
+                  ),
+          ),
+          Positioned(
+            right: -2,
+            bottom: -2,
+            child: Container(
+              width: 18,
+              height: 18,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle, border: Border.all(color: kCardSurfaceColor, width: 1.5)),
+              alignment: Alignment.center,
+              child: Icon(icon, size: 10, color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One of the 4 quick-action icons under a call-log row (Copy/SMS/WhatsApp/
+/// Call) — a plain circular tap target, not a Material [IconButton], so it
+/// sits flush against its 3 siblings without the button's built-in min-size
+/// padding fighting the `spaceEvenly` row.
+class _QuickActionIcon extends StatelessWidget {
+  const _QuickActionIcon({required this.icon, required this.tooltip, required this.onTap, this.color});
+
+  final IconData icon;
+  final String tooltip;
+  final Color? color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Icon(icon, size: 20, color: color ?? Theme.of(context).colorScheme.onSurfaceVariant),
+        ),
       ),
     );
   }

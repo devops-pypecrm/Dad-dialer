@@ -37,7 +37,7 @@ class App extends ConsumerWidget {
     return MaterialApp(
       title: 'Pype Dialer',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
+      theme: AppTheme.dark,
       navigatorKey: _navigatorKey,
       builder: (context, child) => Stack(
         children: [
@@ -443,7 +443,7 @@ class _BottomNavBar extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, -2))],
+        border: Border(top: BorderSide(color: kNestedSurfaceColor.withValues(alpha: 0.6))),
       ),
       child: SafeArea(
         top: false,
