@@ -10,9 +10,11 @@ import 'features/contacts/presentation/screens/contacts_screen.dart';
 import 'features/dialer/data/telecom_bridge.dart';
 import 'features/dialer/domain/call_state.dart';
 import 'features/dialer/presentation/widgets/dialer_keypad_sheet.dart';
+import 'features/dialer/presentation/screens/default_dialer_onboarding_screen.dart';
 import 'features/dialer/presentation/screens/in_call_screen.dart';
 import 'features/dialer/providers/active_call_provider.dart';
 import 'features/dialer/providers/call_guard.dart';
+import 'features/dialer/providers/default_dialer_role_provider.dart';
 import 'features/favorites/presentation/screens/favorites_screen.dart';
 import 'features/leads/domain/crm_lead.dart';
 import 'features/leads/presentation/post_call_lead_sheet.dart';
@@ -58,9 +60,48 @@ class _RootGate extends ConsumerWidget {
     final sessionAsync = ref.watch(sessionControllerProvider);
 
     return sessionAsync.when(
-      data: (session) => session == null ? const LoginScreen() : const _AuthenticatedShell(),
+      data: (session) => session == null ? const LoginScreen() : const _DialerRoleGate(),
       loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (_, _) => const LoginScreen(),
+    );
+  }
+}
+
+/// Sits between login and the bottom-nav shell: as long as the app doesn't
+/// hold `RoleManager.ROLE_DIALER` yet, this renders the full-screen "Set
+/// Default Phone App" ask (see `DefaultDialerOnboardingScreen`) *instead of*
+/// `_AuthenticatedShell` — never on top of it — so its bottom nav bar can
+/// never show through underneath that ask. "Skip" only dismisses it for the
+/// rest of this app launch; a cold restart (or granting the role some other
+/// way) re-evaluates from scratch, same as the reference app's own nag.
+class _DialerRoleGate extends ConsumerStatefulWidget {
+  const _DialerRoleGate();
+
+  @override
+  ConsumerState<_DialerRoleGate> createState() => _DialerRoleGateState();
+}
+
+class _DialerRoleGateState extends ConsumerState<_DialerRoleGate> {
+  bool _skippedThisSession = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final roleAsync = ref.watch(defaultDialerRoleProvider);
+
+    return roleAsync.when(
+      data: (isDefault) {
+        if (!isDefault && !_skippedThisSession) {
+          return DefaultDialerOnboardingScreen(
+            onAgree: () => ref.read(defaultDialerRoleProvider.notifier).requestRole(),
+            onSkip: () => setState(() => _skippedThisSession = true),
+          );
+        }
+        return const _AuthenticatedShell();
+      },
+      loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),
+      // Fails open — a transient role-check error shouldn't lock a signed-in
+      // user out of the whole app.
+      error: (_, _) => const _AuthenticatedShell(),
     );
   }
 }

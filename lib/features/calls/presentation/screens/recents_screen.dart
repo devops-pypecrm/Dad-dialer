@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,7 +43,8 @@ class RecentsScreen extends ConsumerStatefulWidget {
 }
 
 class _RecentsScreenState extends ConsumerState<RecentsScreen> {
-  bool _missedOnly = false;
+  CallLogType? _filter;
+  String _searchQuery = '';
 
   @override
   Widget build(BuildContext context) {
@@ -60,6 +62,11 @@ class _RecentsScreenState extends ConsumerState<RecentsScreen> {
     }
 
     final recentsAsync = ref.watch(recentsProvider);
+    // Shown as a persistent top banner (matching the reference) rather than
+    // a full-screen takeover here — the full-screen ask only happens once,
+    // before the shell even mounts (see `_DialerRoleGate` in app.dart); this
+    // is the standing reminder for anyone who tapped "Skip" there.
+    final isDefaultDialer = ref.watch(defaultDialerRoleProvider).valueOrNull ?? true;
     final listPadding = EdgeInsets.only(bottom: widget.bottomInset + 88);
 
     return SafeArea(
@@ -67,30 +74,59 @@ class _RecentsScreenState extends ConsumerState<RecentsScreen> {
       child: Column(
         children: [
           _CallsHeader(
-            missedOnly: _missedOnly,
+            filter: _filter,
             hasMissedCalls: recentsAsync.valueOrNull?.any((e) => e.type == CallLogType.missed) ?? false,
-            onChanged: (missedOnly) => setState(() => _missedOnly = missedOnly),
+            onFilterChanged: (filter) => setState(() => _filter = filter),
+            onSearchChanged: (query) => setState(() => _searchQuery = query),
           ),
+          if (!isDefaultDialer)
+            _MissingPermissionBanner(
+              onFixNow: () async {
+                await ref.read(defaultDialerRoleProvider.notifier).requestRole();
+                ref.invalidate(recentsProvider);
+              },
+            ),
           Expanded(
             child: RefreshIndicator(
               onRefresh: () => ref.read(recentsProvider.notifier).refresh(),
               child: recentsAsync.when(
                 data: (entries) {
-                  final filtered =
-                      _missedOnly ? entries.where((e) => e.type == CallLogType.missed).toList() : entries;
+                  var filtered = _filter == null ? entries : entries.where((e) => e.type == _filter).toList();
+                  if (_searchQuery.trim().isNotEmpty) {
+                    final query = _searchQuery.trim().toLowerCase();
+                    filtered = filtered
+                        .where((e) =>
+                            (e.cachedName?.toLowerCase().contains(query) ?? false) ||
+                            (e.number?.toLowerCase().contains(query) ?? false))
+                        .toList();
+                  }
                   return filtered.isEmpty
                       ? ListView(
                           children: [
                             Padding(
                               padding: const EdgeInsets.all(32),
-                              child: Center(child: Text(_missedOnly ? 'No missed calls.' : 'No calls yet.')),
+                              child: Center(child: Text(_filter == null ? 'No calls yet.' : 'No calls here.')),
                             ),
                           ],
                         )
                       : _GroupedCallList(entries: filtered, padding: listPadding);
                 },
                 loading: () => const Center(child: CircularProgressIndicator()),
-                error: (error, _) => _RecentsError(error: error),
+                error: (error, _) {
+                  // Already explained by the banner above — an empty list
+                  // reads better here than a second, redundant error block.
+                  final isPermissionDenied = error is PlatformException && error.code == 'permission_denied';
+                  return isPermissionDenied
+                      ? ListView(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.all(32),
+                              child: Center(child: Text('No calls yet.')),
+                            ),
+                          ],
+                        )
+                      : _RecentsError(error: error);
+                },
               ),
             ),
           ),
@@ -316,16 +352,22 @@ class _DialMatchTile extends ConsumerWidget {
   }
 }
 
-/// Big "Calls" title + the All/Missed segmented filter + search/overflow
-/// actions — built into the screen itself rather than a Material [AppBar]
-/// so it can match the reference's exact proportions (title below the
-/// control row, not beside it).
+/// "Call History" title + filter/export icons, then the All/Incoming/
+/// Outgoing/Missed/Rejected tab row and a search field — matching the
+/// reference's layout (title+icons row, tabs row, search row, each full
+/// width) instead of the previous centered All/Missed pill.
 class _CallsHeader extends StatelessWidget {
-  const _CallsHeader({required this.missedOnly, required this.hasMissedCalls, required this.onChanged});
+  const _CallsHeader({
+    required this.filter,
+    required this.hasMissedCalls,
+    required this.onFilterChanged,
+    required this.onSearchChanged,
+  });
 
-  final bool missedOnly;
+  final CallLogType? filter;
   final bool hasMissedCalls;
-  final ValueChanged<bool> onChanged;
+  final ValueChanged<CallLogType?> onFilterChanged;
+  final ValueChanged<String> onSearchChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -334,36 +376,67 @@ class _CallsHeader extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // A Stack rather than a Row so the segmented control centers on
-          // the full screen width -- a Row with the icon buttons as
-          // trailing siblings skews the "center" of the leftover space
-          // instead of the screen, which is what left the control visibly
-          // off-center next to the reference.
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text('Call History', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+                ),
+                IconButton(icon: const Icon(Icons.filter_list_rounded), onPressed: () {}),
+                IconButton(icon: const Icon(Icons.ios_share_rounded), onPressed: () {}),
+              ],
+            ),
+          ),
           SizedBox(
             height: 40,
-            child: Stack(
-              alignment: Alignment.center,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
               children: [
-                Align(
-                  alignment: Alignment.center,
-                  child: _SegmentedFilter(missedOnly: missedOnly, hasMissedCalls: hasMissedCalls, onChanged: onChanged),
+                _CallTypeTab(label: 'All Calls', icon: Icons.phone, selected: filter == null, onTap: () => onFilterChanged(null)),
+                _CallTypeTab(
+                  label: 'Incoming',
+                  icon: Icons.call_received,
+                  color: _kIncomingColor,
+                  selected: filter == CallLogType.incoming,
+                  onTap: () => onFilterChanged(CallLogType.incoming),
                 ),
-                Positioned(
-                  right: 0,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(icon: const Icon(Icons.search), onPressed: () {}),
-                      IconButton(icon: const Icon(Icons.more_vert), onPressed: () {}),
-                    ],
-                  ),
+                _CallTypeTab(
+                  label: 'Outgoing',
+                  icon: Icons.call_made,
+                  color: kBrandColor,
+                  selected: filter == CallLogType.outgoing,
+                  onTap: () => onFilterChanged(CallLogType.outgoing),
+                ),
+                _CallTypeTab(
+                  label: 'Missed',
+                  icon: Icons.call_received,
+                  color: _kMissedColor,
+                  selected: filter == CallLogType.missed,
+                  showDot: hasMissedCalls,
+                  onTap: () => onFilterChanged(CallLogType.missed),
+                ),
+                _CallTypeTab(
+                  label: 'Rejected',
+                  icon: Icons.call_end,
+                  color: _kMissedColor,
+                  selected: filter == CallLogType.rejected,
+                  onTap: () => onFilterChanged(CallLogType.rejected),
                 ),
               ],
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.only(left: 16, top: 4, bottom: 8),
-            child: Text('Calls', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+            child: TextField(
+              onChanged: onSearchChanged,
+              decoration: const InputDecoration(
+                hintText: 'Search',
+                prefixIcon: Icon(Icons.search),
+                isDense: true,
+              ),
+            ),
           ),
         ],
       ),
@@ -371,76 +444,70 @@ class _CallsHeader extends StatelessWidget {
   }
 }
 
-class _SegmentedFilter extends StatelessWidget {
-  const _SegmentedFilter({required this.missedOnly, required this.hasMissedCalls, required this.onChanged});
-
-  final bool missedOnly;
-  final bool hasMissedCalls;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _SegmentButton(label: 'All', selected: !missedOnly, onTap: () => onChanged(false)),
-          _SegmentButton(
-            label: 'Missed',
-            selected: missedOnly,
-            showDot: hasMissedCalls,
-            onTap: () => onChanged(true),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SegmentButton extends StatelessWidget {
-  const _SegmentButton({required this.label, required this.selected, required this.onTap, this.showDot = false});
+/// One tab in the call-type filter row: a direction-colored icon beside its
+/// label, with a small dot under the label when selected (matching the
+/// reference) instead of a filled pill background.
+class _CallTypeTab extends StatelessWidget {
+  const _CallTypeTab({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+    this.color,
+    this.showDot = false,
+  });
 
   final String label;
+  final IconData icon;
   final bool selected;
   final bool showDot;
+  final Color? color;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    final scheme = Theme.of(context).colorScheme;
+    final tint = selected ? (color ?? scheme.onSurface) : scheme.onSurfaceVariant;
+    return InkWell(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
-        decoration: BoxDecoration(
-          color: selected ? kBrandColor.withValues(alpha: 0.16) : Colors.transparent,
-          borderRadius: BorderRadius.circular(17),
-        ),
-        child: Stack(
-          clipBehavior: Clip.none,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              label,
-              style: TextStyle(
-                color: selected ? kBrandColor : Theme.of(context).colorScheme.onSurfaceVariant,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-              ),
-            ),
-            if (showDot)
-              Positioned(
-                right: -8,
-                top: -2,
-                child: Container(
-                  width: 7,
-                  height: 7,
-                  decoration: const BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 15, color: tint),
+                const SizedBox(width: 5),
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(color: tint, fontWeight: selected ? FontWeight.w700 : FontWeight.normal, fontSize: 13),
+                    ),
+                    if (showDot)
+                      Positioned(
+                        right: -8,
+                        top: -2,
+                        child: Container(
+                          width: 6,
+                          height: 6,
+                          decoration: const BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
+                        ),
+                      ),
+                  ],
                 ),
-              ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Container(
+              width: 4,
+              height: 4,
+              decoration: BoxDecoration(color: selected ? tint : Colors.transparent, shape: BoxShape.circle),
+            ),
           ],
         ),
       ),
@@ -448,56 +515,71 @@ class _SegmentButton extends StatelessWidget {
   }
 }
 
-/// `getCallLog` returns a typed `permission_denied` PlatformException when
-/// READ_CALL_LOG isn't granted yet — that permission is only ever requested
-/// via "Set as default dialer" (see `DialerPermissions`'s doc comment), so
-/// this is the expected state for anyone who hasn't done that step yet, not
-/// a bug. Show a real prompt instead of the raw exception text.
-class _RecentsError extends ConsumerWidget {
+/// A genuine, unexpected recents-load failure — the one expected failure
+/// (`permission_denied`, before "Set as default dialer" is granted) is
+/// handled by the caller instead, via `_MissingPermissionBanner` + an empty
+/// list, so it never reaches here.
+class _RecentsError extends StatelessWidget {
   const _RecentsError({required this.error});
 
   final Object error;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final isPermissionDenied = error is PlatformException &&
-        (error as PlatformException).code == 'permission_denied';
-
-    if (!isPermissionDenied) {
-      return ListView(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(32),
-            child: Center(child: Text('Could not load recents: $error')),
-          ),
-        ],
-      );
-    }
-
+  Widget build(BuildContext context) {
     return ListView(
       children: [
         Padding(
           padding: const EdgeInsets.all(32),
-          child: Column(
-            children: [
-              const Icon(Icons.lock_outline, size: 48),
-              const SizedBox(height: 12),
-              const Text(
-                'Pype Dialer needs to be your default Phone app to read call history.',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed: () async {
-                  await ref.read(defaultDialerRoleProvider.notifier).requestRole();
-                  ref.invalidate(recentsProvider);
-                },
-                child: const Text('Set as default dialer'),
-              ),
-            ],
-          ),
+          child: Center(child: Text('Could not load recents: $error')),
         ),
       ],
+    );
+  }
+}
+
+/// "Some required permissions are missing. Please fix this for smooth
+/// functionality. FIX NOW" — matches the reference app's standing reminder
+/// banner, shown above the list on every call-related tab until the user
+/// grants the default-dialer role (whether they skipped the initial full-screen
+/// ask or revoked it later from system Settings).
+class _MissingPermissionBanner extends StatelessWidget {
+  const _MissingPermissionBanner({required this.onFixNow});
+
+  final VoidCallback onFixNow;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3E3B8),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.info_outline, color: Color(0xFFB8860B), size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                style: const TextStyle(color: Color(0xFF4A4028), fontSize: 13, height: 1.3),
+                children: [
+                  const TextSpan(
+                    text: 'Some required permissions are missing. Please fix this for smooth functionality. ',
+                  ),
+                  TextSpan(
+                    text: 'FIX NOW',
+                    style: const TextStyle(fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
+                    recognizer: TapGestureRecognizer()..onTap = onFixNow,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
